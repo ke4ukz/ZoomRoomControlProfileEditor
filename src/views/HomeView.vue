@@ -7,7 +7,9 @@
             :size="outerSizes[0]"
             :min-size="15">
             <div id="builder-column">
-                <BuilderPanel />
+                <BuilderPanel
+                    :profile="rawProfile"
+                    @update:profile="onBuilderEdit" />
             </div>
         </Pane>
         <Pane
@@ -370,7 +372,7 @@ export default {
     name: 'HomeView',
     components: { BuilderPanel, Splitpanes, Pane },
     data: () => ({
-        json: JSON.stringify(exampleJson, null, 2),
+        json: JSON.stringify(exampleJson, null, 4),
         errorMessage: '',
         target: '',
         commands: [],
@@ -443,8 +445,22 @@ export default {
         onResize(name, panes) {
             saveSizes(name, panes);
         },
+        onBuilderEdit(updated) {
+            this.json = JSON.stringify(updated, null, 4);
+        },
     },
     computed: {
+        rawProfile() {
+            // Parsed-but-not-transformed view of the profile, fed to the
+            // builder. Kept separate from `calculatedControls` because the
+            // transform mutates its input (visibility flags, resolved scenes,
+            // etc.) — the builder needs the user-authored shape.
+            try {
+                return JSON.parse(this.json);
+            } catch {
+                return null;
+            }
+        },
         hasHiddenContent() {
             const ctrl = this.calculatedControls;
             if (!ctrl) return false;
