@@ -91,7 +91,17 @@ function applyStyles(json) {
                     const method = port.methods.find(
                         (m) => m.id === result.groups.method
                     );
-                    if (method) method.visible = result.groups.value !== 'true';
+                    if (method) {
+                        const hidden = result.groups.value === 'true';
+                        method.visible = !hidden;
+                        // Track the user's explicit intent separately from the
+                        // visible flag, which also gets flipped to false for
+                        // methods that are rolled up into the port header.
+                        // The renderer keys off userHidden to decide whether
+                        // to actually hide content (which Zoom does for the
+                        // main_method when it is also marked invisible).
+                        method.userHidden = hidden;
+                    }
                 }
                 break;
             }

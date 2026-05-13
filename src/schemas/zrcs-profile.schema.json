@@ -482,7 +482,7 @@
         },
         "command": {
           "type": "string",
-          "description": "Command payload sent to the device. Supports raw escapes (e.g. '\\xAA\\xBB') for hex bytes, or a UTF-8 string. Use '%' as a placeholder where a param value should be substituted. If the command contains '%', a 'params' array must also be provided. The token '<id>.<method>.%' is also accepted as a self-reference."
+          "description": "Command payload sent to the device. Supports raw escapes (e.g. '\\xAA\\xBB') for hex bytes, or a UTF-8 string. With type='actions', use '%' as a placeholder where a param value should be substituted. With type='action', '%' is sent as a literal character (Zoom does no substitution and 'params' is not allowed). The token '<id>.<method>.%' is also accepted as a self-reference."
         },
         "type": {
           "type": "string",
@@ -494,7 +494,7 @@
         },
         "params": {
           "type": "array",
-          "description": "Parameter values that substitute into the '%' placeholder in 'command'. Required only when the command string actually contains a '%' substitution.",
+          "description": "Parameter values that substitute into the '%' placeholder in 'command'. Required (and only valid) when type='actions'.",
           "minItems": 1,
           "items": {
             "$ref": "#/definitions/param"
@@ -507,22 +507,7 @@
       },
       "allOf": [
         {
-          "comment": "Params is required iff the command contains a '%' substitution placeholder. We treat the presence of '%' anywhere in the command as the trigger \u2014 devices like the JVIS projector use literal '%1' inside their protocol, but if there's any '%' at all, params provides the value.",
-          "if": {
-            "properties": {
-              "command": {
-                "pattern": "%"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "params"
-            ]
-          }
-        },
-        {
-          "comment": "type='action' is for parameterless commands. If params is present, Zoom rejects the entire profile (verified on Zoom Room 6.6.1).",
+          "comment": "type='action' is for parameterless commands. If params is present, Zoom rejects the entire profile (verified on Zoom Room 6.6.1). '%' in the command is sent literally with type='action' (Zoom does no substitution), so the presence of '%' does not force the method into type='actions'.",
           "if": {
             "properties": {
               "type": {

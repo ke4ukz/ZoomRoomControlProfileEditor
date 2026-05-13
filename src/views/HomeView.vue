@@ -107,7 +107,14 @@
                                                 :src="getIconUrl(port.icon)" />
                                             <p>{{ port.name }}</p>
                                         </div>
-                                        <div v-if="port.main_method">
+                                        <div
+                                            v-if="port.main_method && (!port.main_method.userHidden || showHidden)"
+                                            :class="{
+                                                'main-method-area': true,
+                                                'hidden-control':
+                                                    port.main_method.userHidden &&
+                                                    !(calculatedControls && calculatedControls.eventOnly),
+                                            }">
                                             <template v-if="port.main_method.params">
                                                 <div class="button-group">
                                                     <div
@@ -385,6 +392,18 @@ export default {
     created() {
         loadRemoteSchema();
     },
+    watch: {
+        // When `zr_event_only=true` is added to the profile (either via the
+        // builder checkbox or a JSON paste), auto-enable "Show hidden controls"
+        // so the user can see what they just made event-only instead of staring
+        // at the placeholder. We only react to the false→true transition so a
+        // manual uncheck of showHidden stays unchecked through later edits.
+        'calculatedControls.eventOnly'(newVal, oldVal) {
+            if (newVal === true && oldVal === false) {
+                this.showHidden = true;
+            }
+        },
+    },
     methods: {
         getIconUrl(iconName) {
             return iconMap[iconName] ?? fallbackIcon;
@@ -468,9 +487,11 @@ export default {
             for (const adapter of ctrl.adapters || []) {
                 for (const port of adapter.ports || []) {
                     for (const method of port.methods || []) {
-                        // Rolled-up main_methods aren't truly hidden — they
-                        // render in the port header.
-                        if (!method.visible && !method.rolledUp) return true;
+                        // userHidden captures the user's explicit `invisible=true`
+                        // style, which is what should drive the warning banner —
+                        // not the rolledUp flag, which only means "shown in
+                        // header instead of list."
+                        if (method.userHidden) return true;
                     }
                 }
             }
@@ -761,27 +782,27 @@ $zoom-button-height: 58px;
                 align-items: flex-start;
                 justify-content: space-between;
                 gap: 1rem;
+            }
 
-                &.hidden-control {
-                    opacity: 0.55;
-                    position: relative;
+            // Applied to either a `.method` row (hidden method in the list)
+            // or a `.main-method-area` (invisible main_method being peeked
+            // via "Show hidden controls"). Pseudo-element so the dashed
+            // marker has its own inset/extents independent of the host
+            // element's flex layout.
+            .hidden-control {
+                opacity: 0.55;
+                position: relative;
 
-                    // Pseudo-element so the dashed marker can have its own
-                    // inset/extents independent of the row's flex layout.
-                    // Extends slightly past the row edges into the port's
-                    // horizontal padding, with a comfortable vertical inset
-                    // so it doesn't crowd the dividers above/below.
-                    &::before {
-                        content: '';
-                        position: absolute;
-                        top: 10px;
-                        bottom: 10px;
-                        left: -10px;
-                        right: -10px;
-                        border: 1px dashed c.$border;
-                        border-radius: 6px;
-                        pointer-events: none;
-                    }
+                &::before {
+                    content: '';
+                    position: absolute;
+                    top: 10px;
+                    bottom: 10px;
+                    left: -10px;
+                    right: -10px;
+                    border: 1px dashed c.$border;
+                    border-radius: 6px;
+                    pointer-events: none;
                 }
             }
 
