@@ -1,22 +1,24 @@
 <template>
     <Splitpanes
         id="editor-frame"
-        class="default-theme">
+        class="default-theme"
+        @resized="onResize('outer', $event)">
         <Pane
-            :size="35"
+            :size="outerSizes[0]"
             :min-size="15">
             <div id="builder-column">
                 <BuilderPanel />
             </div>
         </Pane>
         <Pane
-            :size="65"
+            :size="outerSizes[1]"
             :min-size="30">
             <Splitpanes
                 horizontal
-                class="default-theme">
+                class="default-theme"
+                @resized="onResize('right-col', $event)">
                 <Pane
-                    :size="70"
+                    :size="rightColSizes[0]"
                     :min-size="25">
                     <div id="preview">
                         <div
@@ -206,36 +208,56 @@
                     </div>
                 </Pane>
                 <Pane
-                    :size="30"
+                    :size="rightColSizes[1]"
                     :min-size="15">
-                    <div id="json-entry">
-                        <textarea
-                            id="json-textarea"
-                            v-model="json"
-                            spellcheck="false"></textarea>
-                        <div
-                            id="zoom-output"
-                            v-if="target">
-                            <p class="zoom-output-label">Event:</p>
-                            <p
-                                class="zoom-output-content"
-                                id="zoom-output-target">
-                                {{ target }}
-                            </p>
-                            <p class="zoom-output-label">Command(s):</p>
-                            <div
-                                class="zoom-output-content"
-                                id="zoom-output-command">
-                                <div
-                                    v-for="(c, i) in commands"
-                                    :key="i"
-                                    class="command-row">
-                                    <span class="command-address">{{ c.address }}:</span>
-                                    <pre class="command-text"><span v-for="(seg, j) in splitCommand(c.command)" :key="j" :class="{ ws: seg.ws }">{{ seg.text }}</span></pre>
-                                </div>
+                    <Splitpanes
+                        class="default-theme"
+                        @resized="onResize('bottom-row', $event)">
+                        <Pane
+                            :size="bottomRowSizes[0]"
+                            :min-size="20">
+                            <div id="json-pane">
+                                <textarea
+                                    id="json-textarea"
+                                    v-model="json"
+                                    spellcheck="false"></textarea>
                             </div>
-                        </div>
-                    </div>
+                        </Pane>
+                        <Pane
+                            :size="bottomRowSizes[1]"
+                            :min-size="20">
+                            <div id="output-pane">
+                                <div
+                                    id="zoom-output"
+                                    v-if="target">
+                                    <p class="zoom-output-label">Event:</p>
+                                    <p
+                                        class="zoom-output-content"
+                                        id="zoom-output-target">
+                                        {{ target }}
+                                    </p>
+                                    <p class="zoom-output-label">Command(s):</p>
+                                    <div
+                                        class="zoom-output-content"
+                                        id="zoom-output-command">
+                                        <div
+                                            v-for="(c, i) in commands"
+                                            :key="i"
+                                            class="command-row">
+                                            <span class="command-address">{{ c.address }}:</span>
+                                            <pre class="command-text"><span v-for="(seg, j) in splitCommand(c.command)" :key="j" :class="{ ws: seg.ws }">{{ seg.text }}</span></pre>
+                                        </div>
+                                    </div>
+                                </div>
+                                <p
+                                    v-else
+                                    id="output-empty">
+                                    Click a scene or button in the preview to see the
+                                    event and resolved command(s) here.
+                                </p>
+                            </div>
+                        </Pane>
+                    </Splitpanes>
                 </Pane>
             </Splitpanes>
         </Pane>
@@ -266,6 +288,35 @@ const iconMap = Object.fromEntries(
 );
 const fallbackIcon = iconMap['icon_alert'];
 
+// Splitpane sizes are persisted to localStorage under a versioned key so a
+// future layout change can ignore stale values rather than render a broken UI.
+const LAYOUT_KEY_PREFIX = 'zrcpe.layout.v1.';
+
+function loadSizes(name, defaults) {
+    try {
+        const raw = localStorage.getItem(LAYOUT_KEY_PREFIX + name);
+        if (!raw) return defaults;
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed) || parsed.length !== defaults.length) return defaults;
+        if (!parsed.every((n) => typeof n === 'number' && n >= 0 && n <= 100)) return defaults;
+        return parsed;
+    } catch {
+        return defaults;
+    }
+}
+
+function saveSizes(name, panes) {
+    try {
+        localStorage.setItem(
+            LAYOUT_KEY_PREFIX + name,
+            JSON.stringify(panes.map((p) => p.size))
+        );
+    } catch {
+        // Private mode / quota exceeded / disabled storage — fail silently;
+        // the UI still works, just doesn't persist.
+    }
+}
+
 export default {
     name: 'HomeView',
     components: { BuilderPanel, Splitpanes, Pane },
@@ -275,6 +326,9 @@ export default {
         target: '',
         commands: [],
         scenesExpanded: false,
+        outerSizes: loadSizes('outer', [35, 65]),
+        rightColSizes: loadSizes('right-col', [70, 30]),
+        bottomRowSizes: loadSizes('bottom-row', [65, 35]),
     }),
     created() {
         loadRemoteSchema();
@@ -330,6 +384,9 @@ export default {
         sceneClick(scene) {
             this.target = scene.id;
             this.commands = scene.resolvedCommands;
+        },
+        onResize(name, panes) {
+            saveSizes(name, panes);
         },
     },
     computed: {
@@ -579,26 +636,40 @@ $zoom-button-height: 58px;
     }
 }
 
-#json-entry {
+#json-pane {
     height: 100%;
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
     padding: 0.5rem;
     min-height: 0;
+}
 
-    #json-textarea {
-        flex: 1 1 auto;
-        min-height: 0;
-        border: 1px solid c.$border;
-        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+#json-textarea {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    border: 1px solid c.$border;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+    font-size: 0.9rem;
+    padding: 0.5rem;
+    resize: none;
+}
+
+#output-pane {
+    height: 100%;
+    padding: 0.5rem;
+    overflow: auto;
+
+    #output-empty {
+        color: c.$text-dark;
+        opacity: 0.5;
+        font-style: italic;
         font-size: 0.9rem;
-        padding: 0.5rem;
-        resize: none;
+        padding: 1rem;
+        text-align: center;
     }
 
     #zoom-output {
-        flex: 0 0 auto;
         border: 1px solid c.$border;
         background: #fff;
         display: grid;
@@ -616,8 +687,6 @@ $zoom-button-height: 58px;
             width: 100%;
             font-size: 1rem;
             white-space: pre-wrap;
-            max-height: 200px;
-            overflow-y: auto;
             margin: 0;
             font-family: inherit;
         }
@@ -644,8 +713,9 @@ $zoom-button-height: 58px;
                 background: #f4f4f5;
                 border: 1px solid c.$border;
                 border-radius: 4px;
-                padding: 0.2rem 0.5rem;
+                padding: 1px 4px;
                 margin: 0;
+                line-height: 1.3;
                 white-space: pre-wrap;
 
                 .ws {
