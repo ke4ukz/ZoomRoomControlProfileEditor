@@ -375,6 +375,32 @@ function saveSizes(name, panes) {
     }
 }
 
+// Zoom doesn't care about top-level key order, but Zoom's own example
+// profiles follow info → adapters → scenes → styles → rules → response_filters.
+// We normalize to that order whenever the builder emits a change so newly-added
+// blocks like `info` don't get appended to the bottom. Hand-edits in the
+// textarea preserve whatever order the user typed.
+const PROFILE_KEY_ORDER = [
+    '$schema',
+    'info',
+    'adapters',
+    'scenes',
+    'styles',
+    'rules',
+    'response_filters',
+];
+
+function orderProfileKeys(profile) {
+    const ordered = {};
+    for (const key of PROFILE_KEY_ORDER) {
+        if (key in profile) ordered[key] = profile[key];
+    }
+    for (const key of Object.keys(profile)) {
+        if (!(key in ordered)) ordered[key] = profile[key];
+    }
+    return ordered;
+}
+
 export default {
     name: 'HomeView',
     components: { BuilderPanel, Splitpanes, Pane },
@@ -465,7 +491,7 @@ export default {
             saveSizes(name, panes);
         },
         onBuilderEdit(updated) {
-            this.json = JSON.stringify(updated, null, 4);
+            this.json = JSON.stringify(orderProfileKeys(updated), null, 4);
         },
     },
     computed: {
