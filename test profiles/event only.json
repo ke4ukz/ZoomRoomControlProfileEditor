@@ -1,0 +1,60 @@
+{
+    "info": {
+        "customer": "Example",
+        "location": "Huddle Room 1",
+        "createdBy": "Spectrum Integrators",
+        "$comment": "Fully automated huddle room. Lights and display follow Zoom meeting state — no user-facing buttons. The 'zr_event_only=true' style hides the Native Room Controls UI on the Zoom controller so the Room Controls button is suppressed (or, in deployments with Zoom Apps, launches directly into the app)."
+    },
+    "adapters": [
+        {
+            "model": "iTachIP2CC",
+            "ip": "192.168.10.50",
+            "ports": [
+                {
+                    "id": "lights",
+                    "name": "Lights",
+                    "position": 1
+                }
+            ]
+        },
+        {
+            "model": "GenericNetworkAdapter",
+            "ip": "tcp://192.168.10.60:5000",
+            "ports": [
+                {
+                    "id": "display",
+                    "name": "Display",
+                    "methods": [
+                        {
+                            "id": "power",
+                            "name": "Power",
+                            "command": "PWR %",
+                            "params": [
+                                { "id": "on", "name": "On", "value": "01" },
+                                { "id": "off", "name": "Off", "value": "00" }
+                            ],
+                            "type": "actions"
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "styles": [
+        "zr_event_only=true"
+    ],
+    "rules": {
+        "zr_meeting_started": [
+            "lights.power.on",
+            "display.power.on"
+        ],
+        "zr_meeting_ended": [
+            "lights.power.off",
+            "display.power.off"
+        ],
+        "zr_room_startup_completed": [
+            "lights.power.off",
+            "display.power.off"
+        ]
+    }
+}

@@ -116,16 +116,38 @@ function applyVisibility(json) {
     });
 }
 
+function resolveCommandRefs(json, commandRefs) {
+    return commandRefs.map((commandRef) => {
+        const { port, method, param } = findPortMethodParam(json, commandRef);
+        const adapter = findAdapterForPort(json, port.id);
+        return formatCommand(adapter, port, method, param);
+    });
+}
+
 function resolveScenes(json) {
     if (!Array.isArray(json.scenes)) return;
 
     json.scenes.forEach((scene) => {
-        scene.resolvedCommands = scene.commands.map((commandRef) => {
-            const { port, method, param } = findPortMethodParam(json, commandRef);
-            const adapter = findAdapterForPort(json, port.id);
-            return formatCommand(adapter, port, method, param);
-        });
+        scene.resolvedCommands = resolveCommandRefs(json, scene.commands);
     });
+}
+
+function resolveRules(json) {
+    // Flatten the rules object into an ordered array so the UI can iterate it
+    // without having to filter $comment and re-resolve on every render. Empty
+    // rules (handler defined but no commands) are kept so the user can see
+    // they've claimed the event even if it currently does nothing.
+    if (!json.rules || typeof json.rules !== 'object') {
+        json.resolvedRules = [];
+        return;
+    }
+
+    json.resolvedRules = Object.entries(json.rules)
+        .filter(([event, commands]) => event !== '$comment' && Array.isArray(commands))
+        .map(([event, commands]) => ({
+            event,
+            commands: resolveCommandRefs(json, commands),
+        }));
 }
 
 export function transformProfile(json) {
@@ -133,5 +155,6 @@ export function transformProfile(json) {
     applyStyles(json);
     applyVisibility(json);
     resolveScenes(json);
+    resolveRules(json);
     return json;
 }

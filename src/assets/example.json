@@ -240,16 +240,16 @@
             "cc_projector.power.off",
             "generic_curtain.power.off"
         ],
-        "microphone_muted": [
+        "zr_microphone_muted": [
             "sl_dten_tv.mute.mute"
         ],
-        "microphone_unmuted": [
+        "zr_microphone_unmuted": [
             "sl_dten_tv.mute.unmute"
         ],
-        "video_started": [
+        "zr_video_started": [
             "generic_curtain.power.on"
         ],
-        "video_stopped": [
+        "zr_video_stopped": [
             "generic_curtain.power.off"
         ]
     }

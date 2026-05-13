@@ -228,18 +228,31 @@
                             :min-size="20">
                             <div id="output-pane">
                                 <div
+                                    class="events-section"
+                                    v-if="calculatedControls && calculatedControls.resolvedRules && calculatedControls.resolvedRules.length > 0">
+                                    <p class="section-label">Zoom Room Events</p>
+                                    <div class="events-grid">
+                                        <button
+                                            v-for="(rule, i) in calculatedControls.resolvedRules"
+                                            :key="i"
+                                            class="btn-event"
+                                            :title="rule.event"
+                                            @click="eventClick(rule)">
+                                            {{ eventLabel(rule.event) }}
+                                        </button>
+                                    </div>
+                                </div>
+                                <div
                                     id="zoom-output"
                                     v-if="target">
-                                    <p class="zoom-output-label">Event:</p>
-                                    <p
-                                        class="zoom-output-content"
-                                        id="zoom-output-target">
-                                        {{ target }}
-                                    </p>
-                                    <p class="zoom-output-label">Command(s):</p>
-                                    <div
-                                        class="zoom-output-content"
-                                        id="zoom-output-command">
+                                    <p id="zoom-output-target">{{ target }}</p>
+                                    <hr class="zoom-output-divider" />
+                                    <div id="zoom-output-command">
+                                        <div
+                                            v-if="commands.length === 0"
+                                            class="command-row">
+                                            <span class="command-empty">(no commands)</span>
+                                        </div>
                                         <div
                                             v-for="(c, i) in commands"
                                             :key="i"
@@ -252,8 +265,8 @@
                                 <p
                                     v-else
                                     id="output-empty">
-                                    Click a scene or button in the preview to see the
-                                    event and resolved command(s) here.
+                                    Click a scene, device control, or event to see the resolved
+                                    command(s) here.
                                 </p>
                             </div>
                         </Pane>
@@ -271,6 +284,7 @@ import { transformProfile, formatCommand } from '@/validation/transformProfile';
 import { schemaState, loadRemoteSchema } from '@/validation/schemaLoader';
 import BuilderPanel from '@/components/BuilderPanel.vue';
 import { Splitpanes, Pane } from 'splitpanes';
+import { eventLabel } from '@/data/zoomEvents';
 
 // Vite replacement for webpack's require.context. Eagerly imports every PNG
 // under zoom_icons/dark/ as a URL and indexes them by the filename stem so the
@@ -385,6 +399,11 @@ export default {
             this.target = scene.id;
             this.commands = scene.resolvedCommands;
         },
+        eventClick(rule) {
+            this.target = rule.event;
+            this.commands = rule.commands;
+        },
+        eventLabel,
         onResize(name, panes) {
             saveSizes(name, panes);
         },
@@ -659,6 +678,9 @@ $zoom-button-height: 58px;
     height: 100%;
     padding: 0.5rem;
     overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
 
     #output-empty {
         color: c.$text-dark;
@@ -669,26 +691,69 @@ $zoom-button-height: 58px;
         text-align: center;
     }
 
+    .events-section {
+        flex: 0 0 auto;
+
+        .section-label {
+            font-size: 14px;
+            font-weight: 500;
+            color: c.$text-dark;
+            opacity: 0.7;
+            margin-bottom: 0.4rem;
+        }
+
+        .events-grid {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.4rem;
+        }
+
+        .btn-event {
+            @include b.btn-shared;
+
+            background: #fff;
+            color: c.$text-dark;
+            border: 1px solid c.$border;
+            border-radius: 4px;
+            padding: 0.15rem 0.6rem;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+
+            &:hover {
+                background: c.$zoom-button;
+            }
+
+            &:active {
+                background: color.adjust(c.$zoom-button, $lightness: -10%);
+            }
+        }
+    }
+
+    .command-empty {
+        color: c.$text-dark;
+        opacity: 0.5;
+        font-style: italic;
+    }
+
     #zoom-output {
         border: 1px solid c.$border;
         background: #fff;
-        display: grid;
-        grid-template-columns: min-content auto;
-        gap: 0 0.5rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.4rem;
         padding: 0.5rem;
 
-        .zoom-output-label {
-            font-weight: bold;
+        #zoom-output-target {
             font-size: 1rem;
+            margin: 0;
+            white-space: pre-wrap;
         }
 
-        .zoom-output-content {
-            text-align: left;
-            width: 100%;
-            font-size: 1rem;
-            white-space: pre-wrap;
+        .zoom-output-divider {
+            border: none;
+            border-top: 1px solid c.$zoom-button;
             margin: 0;
-            font-family: inherit;
         }
 
         #zoom-output-command {
