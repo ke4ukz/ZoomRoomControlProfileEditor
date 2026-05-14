@@ -1,8 +1,11 @@
 <template>
-    <Splitpanes
-        id="editor-frame"
-        class="default-theme"
-        @resized="onResize('outer', $event)">
+    <div
+        id="editor-frame-wrap"
+        :class="{ 'preview-fullscreen': previewFullscreen }">
+        <Splitpanes
+            id="editor-frame"
+            class="default-theme"
+            @resized="onResize('outer', $event)">
         <Pane
             :size="outerSizes[0]"
             :min-size="15">
@@ -50,6 +53,14 @@
                                         :title="previewDark ? 'Switch preview to light theme' : 'Switch preview to dark theme'"
                                         @click="previewDark = !previewDark">
                                         <span class="material-icons">contrast</span>
+                                    </button>
+                                    <button
+                                        class="btn-theme-toggle"
+                                        :title="previewFullscreen ? 'Exit preview fullscreen' : 'Expand preview to fill the editor'"
+                                        @click="previewFullscreen = !previewFullscreen">
+                                        <span class="material-icons">
+                                            {{ previewFullscreen ? 'fullscreen_exit' : 'fullscreen' }}
+                                        </span>
                                     </button>
                                 </div>
                             </div>
@@ -364,8 +375,9 @@
                     </Splitpanes>
                 </Pane>
             </Splitpanes>
-        </Pane>
-    </Splitpanes>
+            </Pane>
+        </Splitpanes>
+    </div>
 </template>
 
 <script>
@@ -498,6 +510,7 @@ export default {
         bottomRowSizes: loadSizes('bottom-row', [65, 35]),
         previewDark: loadPreviewDark(),
         previewVariant: loadPreviewVariant(),
+        previewFullscreen: false,
     }),
     created() {
         loadRemoteSchema();
@@ -737,6 +750,14 @@ export default {
 $zoom-panel-width: 666px;
 $zoom-button-height: 58px;
 
+// Wrapper around the outer Splitpanes. It exists purely so we have a stable
+// DOM element to hang the fullscreen-toggle class on — class fallthrough onto
+// the Splitpanes component's root was unreliable.
+#editor-frame-wrap {
+    height: 100%;
+    width: 100%;
+}
+
 #editor-frame {
     // splitpanes' default-theme paints the panes grey, but we want each
     // pane's inner div to control the background. Make panes transparent.
@@ -746,6 +767,60 @@ $zoom-button-height: 58px;
             background-color: transparent;
         }
     }
+}
+
+// Fullscreen-preview mode: hide the builder, the bottom JSON/output row, and
+// both splitter handles so only the preview pane remains. splitpanes sets
+// inline `style="width: …%"` / `height: …%` on each pane, so we override with
+// `!important` to push the visible pane up to 100%. The hidden panes still
+// exist in the DOM — exiting fullscreen restores everything to the user's
+// saved splitter positions automatically.
+#editor-frame-wrap.preview-fullscreen {
+    // Collapse the hidden panes' size to 0 with transitions instead of using
+    // `display: none`. Yanking a pane out of layout instantly causes the
+    // visible pane to "snap" to the freed edge before its own width transition
+    // begins; animating the hidden pane to 0 keeps the visible one anchored
+    // until both have finished moving.
+    //
+    // Outer (vertical) split — target by `.splitpanes--vertical` class rather
+    // than by `#editor-frame` id. Vue's id-fallthrough onto the Splitpanes
+    // component's root was getting dropped in practice, which meant the
+    // id-based selector here matched nothing. Class-based works because
+    // Splitpanes always tags its own root with that class.
+    // NOTE: do NOT add `max-width: 0` / `max-height: 0` to the collapsing pane
+    // — that would clamp the rendered box to 0 on the very first frame and
+    // hide the `width`/`height` transition entirely. `min-*: 0` is needed to
+    // override flexbox's default `min-*: auto` (intrinsic content size); the
+    // visible-pane rules likewise drop `max-*` so we don't clamp on entry.
+    > .splitpanes--vertical > .splitpanes__pane:first-child {
+        width: 0 !important;
+        min-width: 0 !important;
+        overflow: hidden;
+    }
+    > .splitpanes--vertical > .splitpanes__pane:last-child {
+        width: 100% !important;
+    }
+    > .splitpanes--vertical > .splitpanes__splitter {
+        display: none !important;
+    }
+
+    // Inner (horizontal) split inside the right column: collapse bottom row +
+    // expand the preview pane.
+    .splitpanes--horizontal {
+        > .splitpanes__pane:last-child {
+            height: 0 !important;
+            min-height: 0 !important;
+            overflow: hidden;
+        }
+        > .splitpanes__pane:first-child {
+            height: 100% !important;
+        }
+        > .splitpanes__splitter {
+            display: none !important;
+        }
+    }
+    // #zoom-controls keeps its iPad-portrait width (666 px) — fullscreen just
+    // removes the surrounding chrome, it doesn't stretch the Zoom UI itself.
 }
 
 #builder-column {
