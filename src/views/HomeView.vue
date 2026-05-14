@@ -23,7 +23,12 @@
                 <Pane
                     :size="rightColSizes[0]"
                     :min-size="25">
-                    <div id="preview">
+                    <div
+                        id="preview"
+                        :class="{
+                            'dark-preview': previewDark,
+                            'variant-ipad': previewVariant === 'ipad',
+                        }">
                         <div class="preview-sticky-header">
                             <div class="preview-toolbar">
                                 <label class="show-hidden-toggle">
@@ -32,13 +37,21 @@
                                         v-model="showHidden" />
                                     <span>Show hidden controls (testing only)</span>
                                 </label>
-                                <button
-                                    v-if="validationWarnings.length > 0"
-                                    class="btn-warnings-toggle"
-                                    @click="warningsExpanded = !warningsExpanded">
-                                    {{ validationWarnings.length }} warning{{ validationWarnings.length === 1 ? '' : 's' }}
-                                    <span class="caret">{{ warningsExpanded ? '▾' : '▸' }}</span>
-                                </button>
+                                <div class="toolbar-right">
+                                    <button
+                                        v-if="validationWarnings.length > 0"
+                                        class="btn-warnings-toggle"
+                                        @click="warningsExpanded = !warningsExpanded">
+                                        {{ validationWarnings.length }} warning{{ validationWarnings.length === 1 ? '' : 's' }}
+                                        <span class="caret">{{ warningsExpanded ? '▾' : '▸' }}</span>
+                                    </button>
+                                    <button
+                                        class="btn-theme-toggle"
+                                        :title="previewDark ? 'Switch preview to light theme' : 'Switch preview to dark theme'"
+                                        @click="previewDark = !previewDark">
+                                        <span class="material-icons">contrast</span>
+                                    </button>
+                                </div>
                             </div>
                             <div
                                 v-if="validationWarnings.length > 0 && warningsExpanded"
@@ -78,7 +91,11 @@
                         </div>
                         <div
                             id="zoom-controls"
-                            :class="{ 'event-only-shown': calculatedControls && calculatedControls.eventOnly }"
+                            :class="{
+                                'event-only-shown': calculatedControls && calculatedControls.eventOnly,
+                                'dark-theme': previewDark,
+                                'variant-ipad': previewVariant === 'ipad',
+                            }"
                             v-if="calculatedControls != null && shouldRenderControls">
                             <div
                                 class="scenes-section"
@@ -365,20 +382,33 @@ import { json as cmJsonLang } from '@codemirror/lang-json';
 import { jsonSchema as cmJsonSchema } from 'codemirror-json-schema';
 
 // Vite replacement for webpack's require.context. Eagerly imports every PNG
-// under zoom_icons/dark/ as a URL and indexes them by the filename stem so the
-// JSON's icon-by-name references resolve cleanly.
-const iconModules = import.meta.glob('@/assets/zoom_icons/dark/*.png', {
+// under zoom_icons/{dark,light}/ as a URL and indexes them by the filename
+// stem so the JSON's icon-by-name references resolve cleanly. We keep both
+// variants so the preview can swap icon assets when the theme toggles.
+//   - dark/  → dark-stroke icons designed for the light theme
+//   - light/ → light-stroke icons designed for the dark theme
+const darkVariantModules = import.meta.glob('@/assets/zoom_icons/dark/*.png', {
     eager: true,
     query: '?url',
     import: 'default',
 });
-const iconMap = Object.fromEntries(
-    Object.entries(iconModules).map(([path, url]) => {
-        const name = path.split('/').pop().replace(/\.png$/, '');
-        return [name, url];
-    })
-);
-const fallbackIcon = iconMap['icon_alert'];
+const lightVariantModules = import.meta.glob('@/assets/zoom_icons/light/*.png', {
+    eager: true,
+    query: '?url',
+    import: 'default',
+});
+function indexIcons(modules) {
+    return Object.fromEntries(
+        Object.entries(modules).map(([path, url]) => {
+            const name = path.split('/').pop().replace(/\.png$/, '');
+            return [name, url];
+        })
+    );
+}
+const lightThemeIcons = indexIcons(darkVariantModules); // dark-stroke for light bg
+const darkThemeIcons = indexIcons(lightVariantModules); // light-stroke for dark bg
+const lightFallbackIcon = lightThemeIcons['icon_alert'];
+const darkFallbackIcon = darkThemeIcons['icon_alert'] || lightFallbackIcon;
 
 // Splitpane sizes are persisted to localStorage under a versioned key so a
 // future layout change can ignore stale values rather than render a broken UI.
@@ -409,6 +439,49 @@ function saveSizes(name, panes) {
     }
 }
 
+const PREVIEW_THEME_KEY = 'zrcpe.preview-theme.v1';
+
+function loadPreviewDark() {
+    try {
+        return localStorage.getItem(PREVIEW_THEME_KEY) === 'dark';
+    } catch {
+        return false;
+    }
+}
+
+function savePreviewDark(isDark) {
+    try {
+        localStorage.setItem(PREVIEW_THEME_KEY, isDark ? 'dark' : 'light');
+    } catch {
+        // ignore
+    }
+}
+
+// The Zoom NRC UI looks slightly different on iPad (three shades, filled
+// buttons, no borders) vs the browser virtual panel (two shades, outlined
+// buttons). iPad is the realistic deployment target; we default there and
+// leave the browser variant in the stylesheet for future opt-in. No UI to
+// switch right now — flip this constant or add a toggle later.
+const PREVIEW_VARIANT_KEY = 'zrcpe.preview-variant.v1';
+
+function loadPreviewVariant() {
+    try {
+        const v = localStorage.getItem(PREVIEW_VARIANT_KEY);
+        if (v === 'browser' || v === 'ipad') return v;
+    } catch {
+        // ignore
+    }
+    return 'ipad';
+}
+
+function savePreviewVariant(variant) {
+    try {
+        localStorage.setItem(PREVIEW_VARIANT_KEY, variant);
+    } catch {
+        // ignore
+    }
+}
+
 
 export default {
     name: 'HomeView',
@@ -423,6 +496,8 @@ export default {
         outerSizes: loadSizes('outer', [35, 65]),
         rightColSizes: loadSizes('right-col', [70, 30]),
         bottomRowSizes: loadSizes('bottom-row', [65, 35]),
+        previewDark: loadPreviewDark(),
+        previewVariant: loadPreviewVariant(),
     }),
     created() {
         loadRemoteSchema();
@@ -438,10 +513,18 @@ export default {
                 this.showHidden = true;
             }
         },
+        previewDark(newVal) {
+            savePreviewDark(newVal);
+        },
+        previewVariant(newVal) {
+            savePreviewVariant(newVal);
+        },
     },
     methods: {
         getIconUrl(iconName) {
-            return iconMap[iconName] ?? fallbackIcon;
+            const map = this.previewDark ? darkThemeIcons : lightThemeIcons;
+            const fb = this.previewDark ? darkFallbackIcon : lightFallbackIcon;
+            return map[iconName] ?? fb;
         },
         getMaterialIconName(iconName) {
             if (!iconName) return '';
@@ -681,6 +764,25 @@ $zoom-button-height: 58px;
     padding: 0.5rem 0.5rem 0.5rem 0.5rem;
     gap: 0.5rem;
 
+    // Page backgrounds sampled directly from Zoom's actual NRC. The default
+    // (no variant class) is the browser virtual-panel palette; the
+    // `.variant-ipad` overrides below pull in the iPad-controller palette
+    // (which most production Zoom Rooms use). Both variants stay in the
+    // stylesheet so we can switch with one class flip.
+    background: rgb(247, 249, 250);
+
+    &.dark-preview {
+        background: rgb(42, 43, 45);
+    }
+
+    &.variant-ipad {
+        background: #f7f7fd;
+
+        &.dark-preview {
+            background: #242424;
+        }
+    }
+
     .preview-sticky-header {
         align-self: stretch;
         position: sticky;
@@ -732,9 +834,16 @@ $zoom-button-height: 58px;
         line-height: 1.4;
     }
 
+    .toolbar-right {
+        margin-left: auto;
+        display: flex;
+        flex-direction: row;
+        align-items: center;
+        gap: 0.4rem;
+    }
+
     .btn-warnings-toggle {
         @include b.btn-shared;
-        margin-left: auto;
         background: #fef3c7;
         border: 1px solid #f59e0b;
         color: #78350f;
@@ -753,6 +862,30 @@ $zoom-button-height: 58px;
 
         &:hover {
             background: #fde68a;
+        }
+    }
+
+    .btn-theme-toggle {
+        @include b.btn-shared;
+        background: transparent;
+        border: 1px solid c.$border;
+        color: c.$text-dark;
+        border-radius: 4px;
+        width: 26px;
+        height: 26px;
+        padding: 0;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0.7;
+
+        .material-icons {
+            font-size: 16px;
+        }
+
+        &:hover {
+            opacity: 1;
+            background: rgba(0, 0, 0, 0.05);
         }
     }
 
@@ -847,11 +980,148 @@ $zoom-button-height: 58px;
             border-radius: 12px;
         }
 
+        // ----- Browser virtual-panel dark theme -----
+        // Two-shade design with outlined buttons. Active by default when
+        // .variant-ipad isn't set. Colors sampled from Zoom's browser UI.
+        &.dark-theme {
+            color: rgb(247, 249, 250);
+
+            .section-label {
+                color: rgb(147, 155, 164);
+                opacity: 1;
+            }
+
+            .scenes-section {
+                .btn-scene {
+                    background: rgb(34, 35, 37);
+                    color: rgb(247, 249, 250);
+
+                    &:active {
+                        background: rgba(255, 255, 255, 0.05);
+                    }
+                }
+
+                .btn-collapse {
+                    border-color: rgb(104, 111, 121);
+                    color: rgb(147, 155, 164);
+                }
+            }
+
+            .port {
+                background: rgb(34, 35, 37);
+                color: rgb(247, 249, 250);
+
+                .divider {
+                    background: rgba(255, 255, 255, 0.08);
+                }
+
+                .btn-zoom {
+                    background: transparent;
+                    border: 1px solid rgb(104, 111, 121);
+                    color: rgb(247, 249, 250);
+
+                    &:active {
+                        background: rgba(255, 255, 255, 0.08);
+                    }
+                }
+            }
+        }
+
+        // ----- iPad controller theme (active default) -----
+        // Three-shade design: page bg → device bg → button bg, getting
+        // lighter in dark mode and inverting in light mode. Buttons are
+        // filled, no border. Colors sampled from a real iPad Zoom Rooms
+        // controller.
+        &.variant-ipad {
+            .section-label {
+                color: #212130;
+                opacity: 0.55;
+            }
+
+            .scenes-section {
+                .btn-scene {
+                    background: #ffffff;
+                    color: #212130;
+
+                    &:active {
+                        background: rgba(0, 0, 0, 0.04);
+                    }
+                }
+
+                .btn-collapse {
+                    border-color: rgba(33, 33, 48, 0.25);
+                    color: rgba(33, 33, 48, 0.6);
+                }
+            }
+
+            .port {
+                background: #ffffff;
+                color: #212130;
+
+                .divider {
+                    background: #efeff3;
+                }
+
+                .btn-zoom {
+                    background: #efeff3;
+                    border: none;
+                    color: #212130;
+
+                    &:active {
+                        background: rgba(0, 0, 0, 0.06);
+                    }
+                }
+            }
+
+            &.dark-theme {
+                color: #f5f5f5;
+
+                .section-label {
+                    color: #f5f5f5;
+                    opacity: 0.55;
+                }
+
+                .scenes-section {
+                    .btn-scene {
+                        background: #2e2e2e;
+                        color: #f5f5f5;
+
+                        &:active {
+                            background: rgba(255, 255, 255, 0.04);
+                        }
+                    }
+
+                    .btn-collapse {
+                        border-color: rgba(245, 245, 245, 0.25);
+                        color: rgba(245, 245, 245, 0.65);
+                    }
+                }
+
+                .port {
+                    background: #2e2e2e;
+                    color: #f5f5f5;
+
+                    .divider {
+                        background: #414141;
+                    }
+
+                    .btn-zoom {
+                        background: #414141;
+                        border: none;
+                        color: #f5f5f5;
+
+                        &:active {
+                            background: rgba(255, 255, 255, 0.06);
+                        }
+                    }
+                }
+            }
+        }
+
         .section-label {
             font-size: 16px;
             font-weight: 500;
-            color: c.$text-dark;
-            opacity: 0.7;
+            color: rgb(104, 111, 121);
             margin-left: 4px;
         }
 
@@ -871,10 +1141,10 @@ $zoom-button-height: 58px;
             .btn-collapse {
                 @include b.btn-shared;
 
-                border: 1px solid c.$border;
+                border: 1px solid rgb(147, 155, 164);
                 border-radius: 50%;
                 background: transparent;
-                color: c.$text-dark;
+                color: rgb(104, 111, 121);
                 width: 28px;
                 height: 28px;
                 padding: 0;
@@ -905,8 +1175,8 @@ $zoom-button-height: 58px;
 
                 border: none;
                 border-radius: 10px;
-                background: c.$zoom-port-background;
-                color: c.$text-dark;
+                background: rgb(255, 255, 255);
+                color: rgb(34, 35, 37);
                 font-size: 19px;
                 font-weight: bold;
                 padding: 22px 30px;
@@ -924,14 +1194,15 @@ $zoom-button-height: 58px;
                 }
 
                 &:active {
-                    background: color.adjust(c.$zoom-port-background, $lightness: -5%);
+                    background: rgba(0, 0, 0, 0.04);
                 }
             }
         }
 
         .port {
             border-radius: 10px;
-            background: c.$zoom-port-background;
+            background: rgb(255, 255, 255);
+            color: rgb(34, 35, 37);
             padding: 0 30px;
             font-size: 19px;
             width: 100%;
@@ -942,7 +1213,7 @@ $zoom-button-height: 58px;
 
             .divider {
                 height: 1px;
-                background: c.$zoom-button;
+                background: rgba(0, 0, 0, 0.08);
             }
 
             .method {
@@ -998,14 +1269,14 @@ $zoom-button-height: 58px;
             .btn-zoom {
                 @include b.btn-shared;
 
-                border: none;
+                border: 1px solid rgb(147, 155, 164);
                 font-size: 20px;
 
-                background-color: c.$zoom-button;
-                color: c.$text-dark;
+                background-color: transparent;
+                color: rgb(34, 35, 37);
 
                 &:active {
-                    background: color.adjust(c.$zoom-button, $lightness: -10%);
+                    background: rgba(0, 0, 0, 0.05);
                 }
 
                 &.btn-circle {
