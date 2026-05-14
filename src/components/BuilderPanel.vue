@@ -2103,6 +2103,29 @@ export default {
     outline-color: #d97777;
 }
 
+// Cascade the invalid-input hint up through every wrapping container so a
+// user scanning the builder can spot "there's a problem somewhere inside
+// this card" at a glance and follow the dashed-red trail inward to the leaf
+// that's actually empty. The leaf input keeps its solid pale-red treatment;
+// only the ancestors switch to a dashed accent so the two reads as a chain,
+// not duplicate flags. Pure CSS via `:has()` — no JS state to keep in sync.
+// Uses `outline` (not `border`) so cards without a baseline border (port-card,
+// style-row) don't reflow when the indicator turns on; outline-offset: -1px
+// tucks the dashes flush against the card edge.
+.builder-panel {
+    .adapter-card:has(input:required:invalid),
+    .port-card:has(input:required:invalid),
+    .method-card:has(input:required:invalid),
+    .param-card:has(input:required:invalid),
+    .scene-card:has(input:required:invalid),
+    .filter-card:has(input:required:invalid),
+    .rule-card:has(input:required:invalid),
+    .style-row:has(input:required:invalid) {
+        outline: 1px dashed #d97777;
+        outline-offset: -1px;
+    }
+}
+
 .btn-add {
     @include b.btn-shared;
     background: transparent;

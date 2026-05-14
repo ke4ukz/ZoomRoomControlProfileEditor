@@ -18,18 +18,118 @@ function formatPath(instancePath) {
     return instancePath || '(root)';
 }
 
+// Translate a JSON pointer like "/adapters/0/ports/0/id" into something the
+// user can locate in their profile: "GenericNetworkAdapter 192.168.1.10 /
+// port 'cc_light' / id". Walks the parsed JSON in parallel so each numeric
+// index can be replaced with the corresponding identifier; falls back to
+// ordinal ("first port", "second port", …) when the item has no id/name yet,
+// and to the raw segment when the JSON shape doesn't match what we'd expect
+// (e.g. a broken profile where the path goes off the rails).
+const ORDINALS = [
+    'first', 'second', 'third', 'fourth', 'fifth',
+    'sixth', 'seventh', 'eighth', 'ninth', 'tenth',
+];
+function ordinal(n) {
+    if (n < ORDINALS.length) return ORDINALS[n];
+    return `#${n + 1}`;
+}
+function nameOrOrdinal(obj, idx, noun) {
+    if (obj && typeof obj === 'object') {
+        if (typeof obj.id === 'string' && obj.id) return `${noun} '${obj.id}'`;
+        if (typeof obj.name === 'string' && obj.name) return `${noun} '${obj.name}'`;
+    }
+    return `${ordinal(idx)} ${noun}`;
+}
+function describeAdapter(adapter) {
+    if (!adapter || typeof adapter !== 'object') return 'adapter';
+    const model = adapter.model || 'adapter';
+    const addr = adapter.ip || adapter.com || adapter.uuid || '';
+    return addr ? `${model} ${addr}` : model;
+}
+function friendlyPath(instancePath, json) {
+    if (!instancePath || instancePath === '(root)') return '(root)';
+    const segs = instancePath.split('/').slice(1); // drop leading empty
+    const out = [];
+    let cur = json;
+    for (let i = 0; i < segs.length; i++) {
+        const seg = segs[i];
+        const next = segs[i + 1];
+        const idx = next != null ? Number(next) : NaN;
+        const numericNext = Number.isInteger(idx);
+
+        if (seg === 'adapters' && numericNext && Array.isArray(cur && cur.adapters)) {
+            const adapter = cur.adapters[idx];
+            out.push(describeAdapter(adapter));
+            cur = adapter;
+            i++;
+        } else if (seg === 'ports' && numericNext && Array.isArray(cur && cur.ports)) {
+            const port = cur.ports[idx];
+            out.push(nameOrOrdinal(port, idx, 'port'));
+            cur = port;
+            i++;
+        } else if (seg === 'methods' && numericNext && Array.isArray(cur && cur.methods)) {
+            const method = cur.methods[idx];
+            out.push(nameOrOrdinal(method, idx, 'method'));
+            cur = method;
+            i++;
+        } else if (seg === 'params' && numericNext && Array.isArray(cur && cur.params)) {
+            const param = cur.params[idx];
+            out.push(nameOrOrdinal(param, idx, 'param'));
+            cur = param;
+            i++;
+        } else if (seg === 'scenes' && numericNext && Array.isArray(cur && cur.scenes)) {
+            const scene = cur.scenes[idx];
+            out.push(nameOrOrdinal(scene, idx, 'scene'));
+            cur = scene;
+            i++;
+        } else if (seg === 'response_filters' && numericNext && Array.isArray(cur && cur.response_filters)) {
+            const filter = cur.response_filters[idx];
+            // response filters use `name` (not `id`) as their identifier.
+            if (filter && typeof filter.name === 'string' && filter.name) {
+                out.push(`response filter '${filter.name}'`);
+            } else {
+                out.push(`${ordinal(idx)} response filter`);
+            }
+            cur = filter;
+            i++;
+        } else if (seg === 'commands' && numericNext) {
+            out.push(`command ${idx + 1}`);
+            cur = Array.isArray(cur && cur.commands) ? cur.commands[idx] : undefined;
+            i++;
+        } else if (seg === 'rules' && next != null) {
+            out.push(`rule '${next}'`);
+            cur = cur && cur.rules ? cur.rules[next] : undefined;
+            i++;
+            // The next segment after a rule key is an index into the rule's
+            // command array — translate that too.
+            const cmdSeg = segs[i + 1];
+            if (cmdSeg != null && Number.isInteger(Number(cmdSeg)) && Array.isArray(cur)) {
+                out.push(`command ${Number(cmdSeg) + 1}`);
+                cur = cur[Number(cmdSeg)];
+                i++;
+            }
+        } else {
+            // Leaf field name, or a segment we don't recognize. Keep it as-is
+            // — it's still informative (e.g. 'settings', 'icon', 'id').
+            out.push(seg);
+            if (cur && typeof cur === 'object') cur = cur[seg];
+        }
+    }
+    return out.join(' / ');
+}
+
 function definitionNameFromSchemaPath(schemaPath) {
     const m = /#\/definitions\/([^/]+)\//.exec(schemaPath || '');
     return m ? m[1] : null;
 }
 
-function formatSchemaError(err) {
-    const path = formatPath(err.instancePath);
+function formatSchemaError(err, json) {
+    const path = friendlyPath(err.instancePath, json);
     switch (err.keyword) {
         case 'required':
-            return `Missing required field '${err.params.missingProperty}' at ${path}`;
+            return `${path} is missing required field '${err.params.missingProperty}'`;
         case 'additionalProperties':
-            return `Unknown field '${err.params.additionalProperty}' at ${path}`;
+            return `${path} has unknown field '${err.params.additionalProperty}'`;
         case 'enum':
             return `${path} must be one of: ${err.params.allowedValues.join(', ')}`;
         case 'pattern': {
@@ -53,7 +153,7 @@ function formatSchemaError(err) {
         case 'not':
             // The schema's only 'not' clause is the action+params conflict
             // (method-level allOf branch). Recognize it by the path shape.
-            if (/\/methods\/\d+$/.test(path)) {
+            if (/\/methods\/\d+$/.test(err.instancePath || '')) {
                 return `${path} has type 'action' but includes 'params'. Use type 'actions' when params are present, or remove 'params' for type 'action'.`;
             }
             return `${path} matched a disallowed pattern`;
@@ -76,8 +176,8 @@ function runSchemaValidation(json) {
     const chosen = informative.length > 0 ? informative : errors;
     return chosen.map((err) => ({
         source: 'schema',
-        path: formatPath(err.instancePath),
-        message: formatSchemaError(err),
+        path: friendlyPath(err.instancePath, json),
+        message: formatSchemaError(err, json),
     }));
 }
 
@@ -153,7 +253,7 @@ function runCrossRefValidation(json) {
                 if (result.error) {
                     errors.push({
                         source: 'cross-ref',
-                        path: `/scenes/${i}/commands/${j}`,
+                        path: friendlyPath(`/scenes/${i}/commands/${j}`, json),
                         message: `Scene '${scene.id}' references ${result.error} in command '${commandRef}'`,
                     });
                 }
@@ -169,7 +269,7 @@ function runCrossRefValidation(json) {
                 if (result.error) {
                     errors.push({
                         source: 'cross-ref',
-                        path: `/rules/${event}/${j}`,
+                        path: friendlyPath(`/rules/${event}/${j}`, json),
                         message: `Rule '${event}' references ${result.error} in command '${commandRef}'`,
                     });
                 }
@@ -314,8 +414,8 @@ function runUniqueIdValidation(json) {
                 if (portSeen.has(port.id)) {
                     const first = portSeen.get(port.id);
                     flag(
-                        `/adapters/${ai}/ports/${pi}`,
-                        `Port id "${port.id}" already defined at /adapters/${first.ai}/ports/${first.pi}. Command references resolve to the first port — this one is unreachable.`
+                        friendlyPath(`/adapters/${ai}/ports/${pi}`, json),
+                        `Port id "${port.id}" already defined at ${friendlyPath(`/adapters/${first.ai}/ports/${first.pi}`, json)}. Command references resolve to the first port — this one is unreachable.`
                     );
                 } else {
                     portSeen.set(port.id, { ai, pi });
@@ -328,8 +428,8 @@ function runUniqueIdValidation(json) {
                     if (!method || typeof method.id !== 'string') return;
                     if (methodSeen.has(method.id)) {
                         flag(
-                            `/adapters/${ai}/ports/${pi}/methods/${mi}`,
-                            `Method id "${method.id}" already defined at /adapters/${ai}/ports/${pi}/methods/${methodSeen.get(method.id)} on port "${port.id}".`
+                            friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${mi}`, json),
+                            `Method id "${method.id}" already defined at ${friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${methodSeen.get(method.id)}`, json)} on port "${port.id}".`
                         );
                     } else {
                         methodSeen.set(method.id, mi);
@@ -342,8 +442,8 @@ function runUniqueIdValidation(json) {
                         if (!param || typeof param.id !== 'string') return;
                         if (paramSeen.has(param.id)) {
                             flag(
-                                `/adapters/${ai}/ports/${pi}/methods/${mi}/params/${ppi}`,
-                                `Param id "${param.id}" already defined at /adapters/${ai}/ports/${pi}/methods/${mi}/params/${paramSeen.get(param.id)} on method "${port.id}.${method.id}".`
+                                friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${mi}/params/${ppi}`, json),
+                                `Param id "${param.id}" already defined at ${friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${mi}/params/${paramSeen.get(param.id)}`, json)} on method "${port.id}.${method.id}".`
                             );
                         } else {
                             paramSeen.set(param.id, ppi);
@@ -360,8 +460,8 @@ function runUniqueIdValidation(json) {
             if (!scene || typeof scene.id !== 'string') return;
             if (seen.has(scene.id)) {
                 flag(
-                    `/scenes/${si}`,
-                    `Scene id "${scene.id}" already defined at /scenes/${seen.get(scene.id)}.`
+                    friendlyPath(`/scenes/${si}`, json),
+                    `Scene id "${scene.id}" already defined at ${friendlyPath(`/scenes/${seen.get(scene.id)}`, json)}.`
                 );
             } else {
                 seen.set(scene.id, si);
@@ -375,8 +475,8 @@ function runUniqueIdValidation(json) {
             if (!filter || typeof filter.name !== 'string') return;
             if (seen.has(filter.name)) {
                 flag(
-                    `/response_filters/${fi}`,
-                    `Response filter name "${filter.name}" already defined at /response_filters/${seen.get(filter.name)}. Port references resolve to the first one only.`
+                    friendlyPath(`/response_filters/${fi}`, json),
+                    `Response filter name "${filter.name}" already defined at ${friendlyPath(`/response_filters/${seen.get(filter.name)}`, json)}. Port references resolve to the first one only.`
                 );
             } else {
                 seen.set(filter.name, fi);
@@ -410,7 +510,7 @@ function runQuirkValidation(rawText, json) {
                 if (!re.test(rawText)) {
                     errors.push({
                         source: 'quirks',
-                        path: `/rules/${rule}`,
+                        path: friendlyPath(`/rules/${rule}`, json),
                         message:
                             "Empty rules must be truly empty (nothing between the square brackets [])",
                     });
