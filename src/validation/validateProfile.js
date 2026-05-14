@@ -176,6 +176,7 @@ function runSchemaValidation(json) {
     const chosen = informative.length > 0 ? informative : errors;
     return chosen.map((err) => ({
         source: 'schema',
+        pointer: err.instancePath || '',
         path: friendlyPath(err.instancePath, json),
         message: formatSchemaError(err, json),
     }));
@@ -251,9 +252,11 @@ function runCrossRefValidation(json) {
             scene.commands.forEach((commandRef, j) => {
                 const result = findPortMethodParam(json, commandRef);
                 if (result.error) {
+                    const pointer = `/scenes/${i}/commands/${j}`;
                     errors.push({
                         source: 'cross-ref',
-                        path: friendlyPath(`/scenes/${i}/commands/${j}`, json),
+                        pointer,
+                        path: friendlyPath(pointer, json),
                         message: `Scene '${scene.id}' references ${result.error} in command '${commandRef}'`,
                     });
                 }
@@ -267,9 +270,11 @@ function runCrossRefValidation(json) {
             commands.forEach((commandRef, j) => {
                 const result = findPortMethodParam(json, commandRef);
                 if (result.error) {
+                    const pointer = `/rules/${event}/${j}`;
                     errors.push({
                         source: 'cross-ref',
-                        path: friendlyPath(`/rules/${event}/${j}`, json),
+                        pointer,
+                        path: friendlyPath(pointer, json),
                         message: `Rule '${event}' references ${result.error} in command '${commandRef}'`,
                     });
                 }
@@ -400,22 +405,32 @@ function findDuplicateKeys(text) {
 function runUniqueIdValidation(json) {
     const errors = [];
 
-    const flag = (path, message) =>
-        errors.push({ source: 'duplicate-id', path, message });
+    const flag = (pointer, message) =>
+        errors.push({
+            source: 'duplicate-id',
+            pointer,
+            path: friendlyPath(pointer, json),
+            message,
+        });
 
     if (Array.isArray(json.adapters)) {
-        // Port ids are global — cross-ref resolution finds the first match
-        // across every adapter, so collisions anywhere strand the duplicates.
+        // Port ids are globally unique. Zoom's command refs are `port.method`
+        // with no adapter qualifier, so two ports sharing an id on different
+        // adapters would be ambiguous — the resolver finds the first match
+        // and the rest are unreachable via refs.
         const portSeen = new Map();
         json.adapters.forEach((adapter, ai) => {
             if (!adapter || !Array.isArray(adapter.ports)) return;
             adapter.ports.forEach((port, pi) => {
-                if (!port || typeof port.id !== 'string') return;
+                // Skip empty ids — that's a "missing required field" /
+                // pattern problem, not a duplicate. Reporting both would
+                // bury the actual fix the user needs to make.
+                if (!port || typeof port.id !== 'string' || port.id === '') return;
                 if (portSeen.has(port.id)) {
                     const first = portSeen.get(port.id);
                     flag(
-                        friendlyPath(`/adapters/${ai}/ports/${pi}`, json),
-                        `Port id "${port.id}" already defined at ${friendlyPath(`/adapters/${first.ai}/ports/${first.pi}`, json)}. Command references resolve to the first port — this one is unreachable.`
+                        `/adapters/${ai}/ports/${pi}`,
+                        `Port id "${port.id}" already defined at ${friendlyPath(`/adapters/${first.ai}/ports/${first.pi}`, json)}. Port ids must be globally unique — command references resolve to the first match, making this one unreachable.`
                     );
                 } else {
                     portSeen.set(port.id, { ai, pi });
@@ -425,10 +440,13 @@ function runUniqueIdValidation(json) {
                 if (!Array.isArray(port.methods)) return;
                 const methodSeen = new Map();
                 port.methods.forEach((method, mi) => {
-                    if (!method || typeof method.id !== 'string') return;
+                    // Same rationale as the empty-port-id skip above:
+                    // empty method ids are flagged separately by the schema,
+                    // duplicate-on-empty is just noise.
+                    if (!method || typeof method.id !== 'string' || method.id === '') return;
                     if (methodSeen.has(method.id)) {
                         flag(
-                            friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${mi}`, json),
+                            `/adapters/${ai}/ports/${pi}/methods/${mi}`,
                             `Method id "${method.id}" already defined at ${friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${methodSeen.get(method.id)}`, json)} on port "${port.id}".`
                         );
                     } else {
@@ -439,10 +457,10 @@ function runUniqueIdValidation(json) {
                     if (!Array.isArray(method.params)) return;
                     const paramSeen = new Map();
                     method.params.forEach((param, ppi) => {
-                        if (!param || typeof param.id !== 'string') return;
+                        if (!param || typeof param.id !== 'string' || param.id === '') return;
                         if (paramSeen.has(param.id)) {
                             flag(
-                                friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${mi}/params/${ppi}`, json),
+                                `/adapters/${ai}/ports/${pi}/methods/${mi}/params/${ppi}`,
                                 `Param id "${param.id}" already defined at ${friendlyPath(`/adapters/${ai}/ports/${pi}/methods/${mi}/params/${paramSeen.get(param.id)}`, json)} on method "${port.id}.${method.id}".`
                             );
                         } else {
@@ -457,10 +475,10 @@ function runUniqueIdValidation(json) {
     if (Array.isArray(json.scenes)) {
         const seen = new Map();
         json.scenes.forEach((scene, si) => {
-            if (!scene || typeof scene.id !== 'string') return;
+            if (!scene || typeof scene.id !== 'string' || scene.id === '') return;
             if (seen.has(scene.id)) {
                 flag(
-                    friendlyPath(`/scenes/${si}`, json),
+                    `/scenes/${si}`,
                     `Scene id "${scene.id}" already defined at ${friendlyPath(`/scenes/${seen.get(scene.id)}`, json)}.`
                 );
             } else {
@@ -472,10 +490,10 @@ function runUniqueIdValidation(json) {
     if (Array.isArray(json.response_filters)) {
         const seen = new Map();
         json.response_filters.forEach((filter, fi) => {
-            if (!filter || typeof filter.name !== 'string') return;
+            if (!filter || typeof filter.name !== 'string' || filter.name === '') return;
             if (seen.has(filter.name)) {
                 flag(
-                    friendlyPath(`/response_filters/${fi}`, json),
+                    `/response_filters/${fi}`,
                     `Response filter name "${filter.name}" already defined at ${friendlyPath(`/response_filters/${seen.get(filter.name)}`, json)}. Port references resolve to the first one only.`
                 );
             } else {
@@ -487,13 +505,121 @@ function runUniqueIdValidation(json) {
     return errors;
 }
 
+// Walk the JSON text once and build a map from JSON pointer to the 1-based
+// line number where that path appears in the source. Sibling to
+// findDuplicateKeys (same parsing shape) but emits ALL paths, not just dups.
+// Used to annotate validation warnings with the line they live on so the
+// user can jump straight to it in the editor.
+function buildPointerLineMap(text) {
+    const map = new Map();
+    if (typeof text !== 'string' || text.length === 0) return map;
+    let i = 0;
+    let line = 1;
+    const stack = []; // path segments, joined with '/' for the pointer
+
+    const skipWs = () => {
+        while (i < text.length && /\s/.test(text[i])) {
+            if (text[i] === '\n') line++;
+            i++;
+        }
+    };
+    const readString = () => {
+        const start = i;
+        i++;
+        while (i < text.length) {
+            if (text[i] === '\\') { i += 2; continue; }
+            if (text[i] === '"') break;
+            if (text[i] === '\n') line++;
+            i++;
+        }
+        const raw = text.slice(start, i + 1);
+        i++;
+        try { return JSON.parse(raw); } catch { return ''; }
+    };
+    const skipValue = () => {
+        skipWs();
+        if (i >= text.length) return;
+        const ch = text[i];
+        if (ch === '"') { readString(); return; }
+        if (ch === '{') { parseObject(); return; }
+        if (ch === '[') { parseArray(); return; }
+        while (i < text.length && !/[,}\]\s]/.test(text[i])) {
+            if (text[i] === '\n') line++;
+            i++;
+        }
+    };
+    const ptr = () => '/' + stack.map((s) => String(s)).join('/');
+    function parseObject() {
+        i++; // {
+        skipWs();
+        while (i < text.length && text[i] !== '}') {
+            skipWs();
+            if (text[i] !== '"') break;
+            const keyLine = line;
+            const key = readString();
+            stack.push(key);
+            // Record the location of this child path.
+            if (!map.has(ptr())) map.set(ptr(), keyLine);
+            skipWs();
+            if (text[i] === ':') i++;
+            skipValue();
+            stack.pop();
+            skipWs();
+            if (text[i] === ',') { i++; continue; }
+        }
+        if (text[i] === '}') i++;
+    }
+    function parseArray() {
+        i++; // [
+        skipWs();
+        let idx = 0;
+        while (i < text.length && text[i] !== ']') {
+            skipWs();
+            const itemLine = line;
+            stack.push(idx);
+            if (!map.has(ptr())) map.set(ptr(), itemLine);
+            skipValue();
+            stack.pop();
+            idx++;
+            skipWs();
+            if (text[i] === ',') { i++; continue; }
+        }
+        if (text[i] === ']') i++;
+    }
+
+    skipWs();
+    if (text[i] === '{') parseObject();
+    else if (text[i] === '[') parseArray();
+    return map;
+}
+
+// Find the nearest enclosing pointer in the line map. If `/a/b/c` isn't a
+// key but `/a/b` is, return `/a/b`'s line — handy for "missing required
+// field" errors where the field doesn't exist in the source.
+function lineForPointer(map, pointer) {
+    if (!pointer) return null;
+    if (map.has(pointer)) return map.get(pointer);
+    let p = pointer;
+    while (p.length > 0) {
+        const slash = p.lastIndexOf('/');
+        if (slash < 0) break;
+        p = p.slice(0, slash);
+        if (map.has(p)) return map.get(p);
+    }
+    return null;
+}
+
 function runDuplicateKeyValidation(rawText) {
     if (typeof rawText !== 'string') return [];
-    return findDuplicateKeys(rawText).map((d) => ({
-        source: 'duplicate-key',
-        path: '/' + d.path + (d.path === '(root)' ? d.key : '/' + d.key),
-        message: `Duplicate key "${d.key}" in ${d.path}. JSON parsers collapse duplicates (later value wins) — remove one.`,
-    }));
+    return findDuplicateKeys(rawText).map((d) => {
+        const pointer = '/' + d.path + (d.path === '(root)' ? d.key : '/' + d.key);
+        return {
+            source: 'duplicate-key',
+            pointer,
+            path: pointer,
+            message: `Duplicate key "${d.key}" in ${d.path}. JSON parsers collapse duplicates (later value wins) — remove one.`,
+        };
+    });
 }
 
 function runQuirkValidation(rawText, json) {
@@ -508,9 +634,11 @@ function runQuirkValidation(rawText, json) {
             if (Array.isArray(json.rules[rule]) && json.rules[rule].length === 0) {
                 const re = new RegExp('"rules"(.|\\n)*"' + rule + '": \\[\\]');
                 if (!re.test(rawText)) {
+                    const pointer = `/rules/${rule}`;
                     errors.push({
                         source: 'quirks',
-                        path: friendlyPath(`/rules/${rule}`, json),
+                        pointer,
+                        path: friendlyPath(pointer, json),
                         message:
                             "Empty rules must be truly empty (nothing between the square brackets [])",
                     });
@@ -522,32 +650,117 @@ function runQuirkValidation(rawText, json) {
     return errors;
 }
 
+// Backstop for serial port settings. AJV's nested if/then branches with $ref
+// schemas sometimes don't surface conditional sub-errors as cleanly as they
+// should — particularly enum violations inside the model-conditional `then`
+// clauses. Walk the adapters ourselves and spell out the exact allowed
+// values so the user always sees "data_bits must be one of 5/6/7/8" instead
+// of relying on AJV's chain-of-conditionals to bubble that up.
+const USB_SERIAL_ALLOWED = {
+    baud_rate: [300, 600, 1200, 1800, 2400, 4800, 7200, 9600, 14400, 19200, 28800, 38400, 115200, 230400],
+    data_bits: [5, 6, 7, 8],
+    parity: [0, 1, 2, 3, 4],
+    stop_bits: [1, 2, 3], // 1 = 1 bit, 2 = 2 bits, 3 = 1.5 bits (per Zoom's encoding)
+    flow_control: [0, 1, 2],
+};
+const ITACH_SERIAL_ALLOWED = {
+    baud_rate: ['300', '1200', '2400', '4800', '9600', '19200', '38400', '57600', '115200'],
+    flow_control: ['FLOW_NONE', 'FLOW_HARDWARE'],
+    parity: ['PARITY_NO', 'PARITY_ODD', 'PARITY_EVEN'],
+};
+function runSerialSettingsValidation(json) {
+    const errors = [];
+    if (!Array.isArray(json.adapters)) return errors;
+    json.adapters.forEach((adapter, ai) => {
+        if (!adapter || !Array.isArray(adapter.ports)) return;
+        let allowed;
+        if (adapter.model === 'USB2Serial') allowed = USB_SERIAL_ALLOWED;
+        else if (adapter.model === 'iTachIP2SL') allowed = ITACH_SERIAL_ALLOWED;
+        else return; // Other models don't have serial settings.
+        adapter.ports.forEach((port, pi) => {
+            if (!port) return;
+            const settings = port.settings;
+            const settingsIsObject = settings && typeof settings === 'object';
+            Object.entries(allowed).forEach(([field, allowedValues]) => {
+                const pointer = `/adapters/${ai}/ports/${pi}/settings/${field}`;
+                // Missing settings object, OR missing required field within
+                // it (the model-conversion case where a port created under
+                // GenericNetworkAdapter is reassigned to a serial model):
+                // emit a per-field error so each dropdown can highlight
+                // itself, instead of just the surrounding card.
+                if (!settingsIsObject || !(field in settings)) {
+                    errors.push({
+                        source: 'serial-settings',
+                        pointer,
+                        path: friendlyPath(pointer, json),
+                        message: `${friendlyPath(pointer, json)} is required for ${adapter.model} — must be one of: ${allowedValues.join(', ')}`,
+                    });
+                    return;
+                }
+                const value = settings[field];
+                if (allowedValues.includes(value)) return;
+                errors.push({
+                    source: 'serial-settings',
+                    pointer,
+                    path: friendlyPath(pointer, json),
+                    message: `${friendlyPath(pointer, json)} = ${JSON.stringify(value)} is not a valid ${adapter.model} value — must be one of: ${allowedValues.join(', ')}`,
+                });
+            });
+        });
+    });
+    return errors;
+}
+
+function annotateLines(errors, lineMap) {
+    for (const e of errors) {
+        if (e.line) continue;
+        const ln = lineForPointer(lineMap, e.pointer);
+        if (ln) e.line = ln;
+    }
+    return errors;
+}
+
 export function validateProfile(rawText, json) {
+    // Build the pointer→line map once per validation so every error can be
+    // tagged with the line it sits on. Cheap (single text walk) and gives the
+    // user something concrete to navigate to.
+    const lineMap = buildPointerLineMap(rawText);
+
     // Duplicate-key (text-scan) and duplicate-id (parsed-object scan)
     // warnings apply regardless of schema/cross-ref state — they happen at a
     // level the other validators can't see. Always include them.
     const alwaysErrors = [
         ...runDuplicateKeyValidation(rawText),
         ...runUniqueIdValidation(json),
+        ...runSerialSettingsValidation(json),
     ];
 
     const schemaErrors = runSchemaValidation(json);
     if (schemaErrors.length > 0) {
-        return { ok: false, errors: [...alwaysErrors, ...schemaErrors] };
+        return {
+            ok: false,
+            errors: annotateLines([...alwaysErrors, ...schemaErrors], lineMap),
+        };
     }
 
     const crossRefErrors = runCrossRefValidation(json);
     if (crossRefErrors.length > 0) {
-        return { ok: false, errors: [...alwaysErrors, ...crossRefErrors] };
+        return {
+            ok: false,
+            errors: annotateLines([...alwaysErrors, ...crossRefErrors], lineMap),
+        };
     }
 
     const quirkErrors = runQuirkValidation(rawText, json);
     if (quirkErrors.length > 0) {
-        return { ok: false, errors: [...alwaysErrors, ...quirkErrors] };
+        return {
+            ok: false,
+            errors: annotateLines([...alwaysErrors, ...quirkErrors], lineMap),
+        };
     }
 
     if (alwaysErrors.length > 0) {
-        return { ok: false, errors: alwaysErrors };
+        return { ok: false, errors: annotateLines(alwaysErrors, lineMap) };
     }
 
     return { ok: true, errors: [] };

@@ -111,7 +111,8 @@
             <div
                 v-for="(adapter, ai) in localProfile.adapters"
                 :key="'adapter-' + ai"
-                class="adapter-card">
+                class="adapter-card"
+                :class="{ 'has-validation-error': errorTargets.adapters.has(String(ai)) }">
                 <div class="adapter-header">
                     <span class="row-label">Adapter</span>
                     <div class="adapter-model-combo">
@@ -119,6 +120,7 @@
                             type="text"
                             v-model="adapter.model"
                             class="adapter-model"
+                            :class="{ 'has-validation-error': errorTargets.adapterFields.has(ai + '#model') }"
                             placeholder="model"
                             required
                             @change="onAdapterModelChange(ai)" />
@@ -147,6 +149,7 @@
                         v-if="adapter.model !== 'USB2Serial'"
                         type="text"
                         class="adapter-addr"
+                        :class="{ 'has-validation-error': errorTargets.adapterFields.has(ai + '#ip') }"
                         :placeholder="ipPlaceholder(adapter.model)"
                         v-model="adapter.ip"
                         :required="!adapter.uuid" />
@@ -154,6 +157,7 @@
                         v-else
                         type="text"
                         class="adapter-addr"
+                        :class="{ 'has-validation-error': errorTargets.adapterFields.has(ai + '#com') }"
                         placeholder="com port"
                         v-model="adapter.com"
                         required />
@@ -161,7 +165,11 @@
                         v-if="adapter.model === 'iTachIP2SL' || adapter.model === 'iTachIP2CC'"
                         type="text"
                         class="adapter-uuid"
-                        placeholder="UUID (optional)"
+                        :class="{ 'has-validation-error': errorTargets.adapterFields.has(ai + '#uuid') }"
+                        placeholder="GlobalCache_<MAC>"
+                        title="iTach beacon UUID, e.g. GlobalCache_000C1E051AEE"
+                        required
+                        pattern="^GlobalCache_[0-9A-Fa-f]{12}$"
                         v-model="adapter.uuid" />
                     <button
                         class="btn-delete"
@@ -178,7 +186,8 @@
                     <div
                         v-for="(port, pi) in adapter.ports"
                         :key="'port-' + pi"
-                        class="port-card">
+                        class="port-card"
+                        :class="{ 'has-validation-error': errorTargets.ports.has(ai + ':' + (port.id || '#' + pi)) }">
                         <div class="port-header">
                             <span class="row-label">Port</span>
                             <input
@@ -186,7 +195,9 @@
                                 class="port-id"
                                 placeholder="id"
                                 required
-                                v-model="port.id" />
+                                v-model="port.id"
+                                @focus="onIdFocus(port, 'id')"
+                                @change="onPortIdCommit(port)" />
                             <input
                                 type="text"
                                 class="port-name"
@@ -227,22 +238,22 @@
                             class="settings-card">
                             <span class="row-label small">Settings</span>
                             <div class="settings-grid">
-                                <label>baud
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'baud_rate') }">baud
                                     <select :value="port.settings?.baud_rate"
                                             @change="ensurePortSettings(port, 'iTachIP2SL'); port.settings.baud_rate = $event.target.value">
                                         <option v-for="b in ITACH_BAUD" :key="b" :value="b">{{ b }}</option>
                                     </select>
                                 </label>
-                                <label>flow
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'flow_control') }">flow
                                     <select :value="port.settings?.flow_control"
                                             @change="ensurePortSettings(port, 'iTachIP2SL'); port.settings.flow_control = $event.target.value">
-                                        <option v-for="f in ITACH_FLOW" :key="f" :value="f">{{ f }}</option>
+                                        <option v-for="f in ITACH_FLOW" :key="f.value" :value="f.value">{{ f.label }}</option>
                                     </select>
                                 </label>
-                                <label>parity
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'parity') }">parity
                                     <select :value="port.settings?.parity"
                                             @change="ensurePortSettings(port, 'iTachIP2SL'); port.settings.parity = $event.target.value">
-                                        <option v-for="p in ITACH_PARITY" :key="p" :value="p">{{ p }}</option>
+                                        <option v-for="p in ITACH_PARITY" :key="p.value" :value="p.value">{{ p.label }}</option>
                                     </select>
                                 </label>
                             </div>
@@ -254,31 +265,31 @@
                             class="settings-card">
                             <span class="row-label small">Settings</span>
                             <div class="settings-grid">
-                                <label>baud
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'baud_rate') }">baud
                                     <select :value="port.settings?.baud_rate"
                                             @change="ensurePortSettings(port, 'USB2Serial'); port.settings.baud_rate = Number($event.target.value)">
                                         <option v-for="b in USB_BAUD" :key="b" :value="b">{{ b }}</option>
                                     </select>
                                 </label>
-                                <label>data
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'data_bits') }">data
                                     <select :value="port.settings?.data_bits"
                                             @change="ensurePortSettings(port, 'USB2Serial'); port.settings.data_bits = Number($event.target.value)">
                                         <option v-for="d in USB_DATA_BITS" :key="d" :value="d">{{ d }}</option>
                                     </select>
                                 </label>
-                                <label>parity
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'parity') }">parity
                                     <select :value="port.settings?.parity"
                                             @change="ensurePortSettings(port, 'USB2Serial'); port.settings.parity = Number($event.target.value)">
                                         <option v-for="(label, i) in USB_PARITY_LABELS" :key="i" :value="i">{{ label }}</option>
                                     </select>
                                 </label>
-                                <label>stop
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'stop_bits') }">stop
                                     <select :value="port.settings?.stop_bits"
                                             @change="ensurePortSettings(port, 'USB2Serial'); port.settings.stop_bits = Number($event.target.value)">
                                         <option v-for="(label, i) in USB_STOP_BITS_LABELS" :key="i" :value="USB_STOP_BITS[i]">{{ label }}</option>
                                     </select>
                                 </label>
-                                <label>flow
+                                <label :class="{ 'has-validation-error': settingHasError(ai, port, pi, 'flow_control') }">flow
                                     <select :value="port.settings?.flow_control"
                                             @change="ensurePortSettings(port, 'USB2Serial'); port.settings.flow_control = Number($event.target.value)">
                                         <option v-for="(label, i) in USB_FLOW_LABELS" :key="i" :value="i">{{ label }}</option>
@@ -305,6 +316,7 @@
                                 :class="{
                                     'method-hidden': isMethodInvisible(port.id, method.id),
                                     'method-main': getMainMethod(port.id) === method.id,
+                                    'has-validation-error': errorTargets.methods.has(ai + ':' + (port.id || '#' + pi) + '#' + mi),
                                 }">
                                 <div class="method-row">
                                     <span class="row-label">Method</span>
@@ -313,7 +325,9 @@
                                         class="method-id"
                                         placeholder="id"
                                         required
-                                        v-model="method.id" />
+                                        v-model="method.id"
+                                        @focus="onIdFocus(method, 'id', { portId: port.id })"
+                                        @change="onMethodIdCommit(port, method)" />
                                     <input
                                         type="text"
                                         class="method-name"
@@ -390,7 +404,11 @@
                                     <div
                                         v-for="(param, ppi) in method.params"
                                         :key="'param-' + ppi"
-                                        class="param-card">
+                                        class="param-card"
+                                        :class="{
+                                            'has-validation-error':
+                                                errorTargets.params.has(ai + ':' + (port.id || '#' + pi) + '#' + mi + '#' + ppi),
+                                        }">
                                         <div class="param-row">
                                             <span class="row-label">Param</span>
                                             <input
@@ -398,7 +416,9 @@
                                                 class="param-id"
                                                 placeholder="id"
                                                 required
-                                                v-model="param.id" />
+                                                v-model="param.id"
+                                                @focus="onIdFocus(param, 'id', { portId: port.id, methodId: method.id })"
+                                                @change="onParamIdCommit(port, method, param)" />
                                             <input
                                                 type="text"
                                                 class="param-name"
@@ -836,8 +856,19 @@ const INFO_PLACEHOLDERS = {
 };
 
 const ITACH_BAUD = ['300', '1200', '2400', '4800', '9600', '19200', '38400', '57600', '115200'];
-const ITACH_FLOW = ['FLOW_NONE', 'FLOW_HARDWARE'];
-const ITACH_PARITY = ['PARITY_NO', 'PARITY_ODD', 'PARITY_EVEN'];
+// Display labels paired with the raw values Zoom expects. Mirror the
+// USB2Serial dropdowns ('None' / 'Hardware', 'None' / 'Even' / 'Odd') so the
+// two adapter UIs read consistently while the JSON still gets the string
+// tokens iTachIP2SL requires.
+const ITACH_FLOW = [
+    { value: 'FLOW_NONE', label: 'None' },
+    { value: 'FLOW_HARDWARE', label: 'Hardware' },
+];
+const ITACH_PARITY = [
+    { value: 'PARITY_NO', label: 'None' },
+    { value: 'PARITY_EVEN', label: 'Even' },
+    { value: 'PARITY_ODD', label: 'Odd' },
+];
 
 const USB_BAUD = [300, 600, 1200, 1800, 2400, 4800, 7200, 9600, 14400, 19200, 28800, 38400, 115200, 230400];
 const USB_DATA_BITS = [5, 6, 7, 8];
@@ -976,6 +1007,23 @@ export default {
         profile: {
             type: Object,
             default: null,
+        },
+        // { adapters, ports, methods, params, settings, scenes } — sets of
+        // string keys identifying which items have validation errors. Used
+        // to paint the same dashed-red indicator on builder cards/fields
+        // that the preview already uses. Falls back to empty sets when not
+        // wired so the builder still works in isolation.
+        errorTargets: {
+            type: Object,
+            default: () => ({
+                adapters: new Set(),
+                adapterFields: new Set(),
+                ports: new Set(),
+                methods: new Set(),
+                params: new Set(),
+                settings: new Set(),
+                scenes: new Set(),
+            }),
         },
     },
     emits: ['update:json', 'download'],
@@ -1135,6 +1183,10 @@ export default {
         },
     },
     methods: {
+        settingHasError(adapterIndex, port, portIndex, field) {
+            const key = adapterIndex + ':' + (port.id || `#${portIndex}`) + '#' + field;
+            return this.errorTargets.settings.has(key);
+        },
         ipPlaceholder(/* model */) {
             // Plain field-name placeholder so empty + required highlight
             // doesn't read as "an address that's malformed". The model-aware
@@ -1214,7 +1266,18 @@ export default {
                             {
                                 id: '',
                                 name: '',
-                                methods: [],
+                                // Seed one empty method so the schema's
+                                // `methods.minItems: 1` is satisfied right
+                                // out of the gate — the user only needs to
+                                // fill values, not click "+ Method" first.
+                                methods: [
+                                    {
+                                        id: '',
+                                        name: '',
+                                        command: '',
+                                        type: 'action',
+                                    },
+                                ],
                             },
                         ],
                     },
@@ -1326,8 +1389,12 @@ export default {
         // ----- Adapters -----
         addAdapter() {
             if (!this.localProfile.adapters) this.localProfile.adapters = [];
+            // GenericNetworkAdapter is the most permissive default — it
+            // doesn't require a UUID (iTach) or COM port (USB2Serial), so
+            // the user can fill in just the address and start adding ports
+            // without first having to satisfy a model-specific constraint.
             this.localProfile.adapters.push({
-                model: 'iTachIP2SL',
+                model: 'GenericNetworkAdapter',
                 ip: '',
                 ports: [],
             });
@@ -1361,8 +1428,19 @@ export default {
             const port = { id: '', name: '' };
             if (adapter.model === 'iTachIP2CC') {
                 port.position = 1;
-            } else {
-                port.methods = [];
+            }
+            // Intentionally NOT seeding port.methods = [] — Zoom rejects
+            // empty methods arrays in the JSON (minItems: 1), and
+            // `addMethod` lazily creates the array when the user actually
+            // adds a method. The builder UI works fine with methods
+            // undefined (v-for over undefined renders nothing).
+            //
+            // Seed serial settings with sane defaults (9600-8N1, no flow)
+            // so newly-added USB2Serial / iTachIP2SL ports don't immediately
+            // light up with "missing required field" warnings before the
+            // user even gets a chance to type anything.
+            if (adapter.model === 'USB2Serial' || adapter.model === 'iTachIP2SL') {
+                this.ensurePortSettings(port, adapter.model);
             }
             adapter.ports.push(port);
         },
@@ -1400,7 +1478,12 @@ export default {
             });
         },
         removeMethod(ai, pi, mi) {
-            this.localProfile.adapters[ai].ports[pi].methods.splice(mi, 1);
+            const port = this.localProfile.adapters[ai].ports[pi];
+            port.methods.splice(mi, 1);
+            // Drop the key entirely when it goes empty — Zoom rejects an
+            // empty methods array (minItems: 1), and an absent key is the
+            // canonical representation of "no methods yet."
+            if (port.methods.length === 0) delete port.methods;
         },
         onMethodTypeChange(method) {
             if (method.type === 'actions') {
@@ -1457,6 +1540,94 @@ export default {
             } else {
                 this.localProfile.styles = next;
             }
+        },
+
+        // ----- Id-rename plumbing -----
+        // When a user renames a port / method / param id, every style entry
+        // (icons, main_method, invisible, etc.) that keyed off the OLD id
+        // would otherwise be orphaned — the rendered preview would lose its
+        // icons until the user manually re-typed them. We capture the id at
+        // focus time so the commit (blur / Enter) can do a one-shot rename
+        // of the matching style keys. Per-keystroke renaming via v-model is
+        // a non-starter — mid-edit ids like "s", "sc", "scr" would tag the
+        // styles to transient values and never recover.
+        onIdFocus(target, field, parents) {
+            // Stash a snapshot at focus time keyed by the in-memory object so
+            // the matching change handler can read it back without us having
+            // to thread state through every input.
+            this._idFocusSnapshot = {
+                target,
+                value: target[field],
+                portId: parents && parents.portId,
+                methodId: parents && parents.methodId,
+            };
+        },
+        readIdFocusSnapshot(target) {
+            const snap = this._idFocusSnapshot;
+            this._idFocusSnapshot = null;
+            // Only honor a snapshot if it was for the same object — guards
+            // against weird focus-loss / refocus races.
+            if (!snap || snap.target !== target) return null;
+            return snap;
+        },
+        renameStylesPrefix(oldPrefix, newPrefix) {
+            if (!Array.isArray(this.localProfile.styles)) return;
+            this.localProfile.styles = this.localProfile.styles.map((s) =>
+                typeof s === 'string' && s.startsWith(oldPrefix)
+                    ? newPrefix + s.slice(oldPrefix.length)
+                    : s
+            );
+            // Also rewrite the bare "<portId>.main_method=<methodId>" values:
+            // the main_method's *value* references a method id by name, so a
+            // method rename has to update both the key and the value half.
+            // Handled by callers via renameMainMethodValue when relevant.
+        },
+        renameMainMethodValue(portId, oldMethodId, newMethodId) {
+            if (!Array.isArray(this.localProfile.styles)) return;
+            const prefix = `${portId}.main_method=`;
+            this.localProfile.styles = this.localProfile.styles.map((s) => {
+                if (typeof s !== 'string' || !s.startsWith(prefix)) return s;
+                return s.slice(prefix.length) === oldMethodId
+                    ? `${prefix}${newMethodId}`
+                    : s;
+            });
+        },
+        onPortIdCommit(port) {
+            const snap = this.readIdFocusSnapshot(port);
+            if (!snap) return;
+            const oldId = snap.value;
+            const newId = port.id;
+            if (!oldId || !newId || oldId === newId) return;
+            this.renameStylesPrefix(`${oldId}.`, `${newId}.`);
+        },
+        onMethodIdCommit(port, method) {
+            const snap = this.readIdFocusSnapshot(method);
+            if (!snap) return;
+            const oldMethodId = snap.value;
+            const newMethodId = method.id;
+            const portId = snap.portId || port.id;
+            if (!portId || !oldMethodId || !newMethodId || oldMethodId === newMethodId) return;
+            this.renameStylesPrefix(
+                `${portId}.${oldMethodId}.`,
+                `${portId}.${newMethodId}.`
+            );
+            // If this method was the port's main_method, the value side of
+            // the main_method= style needs updating too — it references the
+            // method by name.
+            this.renameMainMethodValue(portId, oldMethodId, newMethodId);
+        },
+        onParamIdCommit(port, method, param) {
+            const snap = this.readIdFocusSnapshot(param);
+            if (!snap) return;
+            const oldParamId = snap.value;
+            const newParamId = param.id;
+            const portId = snap.portId || port.id;
+            const methodId = snap.methodId || method.id;
+            if (!portId || !methodId || !oldParamId || !newParamId || oldParamId === newParamId) return;
+            this.renameStylesPrefix(
+                `${portId}.${methodId}.${oldParamId}.`,
+                `${portId}.${methodId}.${newParamId}.`
+            );
         },
 
         // ----- main_method (styles-backed) -----
@@ -1711,9 +1882,11 @@ export default {
         font-size: 18px;
     }
 
+    // Subtle when disabled (typically because the parent id is missing —
+    // the cascading red outline on the card already tells the user where the
+    // real problem is, so this shouldn't shout "broken").
     &:disabled {
-        cursor: not-allowed;
-        opacity: 0.4;
+        opacity: 0.7;
     }
 }
 
@@ -1761,9 +1934,11 @@ export default {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
     font-size: 0.78rem;
 
+    // Disabled when the parent's id is empty (icons are styles-backed, keyed
+    // by the id, so there's nothing to save against yet). Kept very subtle —
+    // the dashed red cascade outline already flags the real problem.
     &:disabled {
-        opacity: 0.5;
-        cursor: not-allowed;
+        opacity: 0.85;
     }
 }
 
@@ -2256,6 +2431,42 @@ export default {
 }
 .builder-panel input:required:invalid:focus {
     outline-color: #d97777;
+}
+
+// Validator-driven error indicator. Used by anything the validator flagged
+// (cards via `errorTargets` props, individual setting <label>s via
+// `settingHasError`). Uses outline (not border) so toggling it doesn't
+// reflow the builder, and matches the dashed-firebrick style we use in the
+// preview pane for consistency.
+.builder-panel {
+    .has-validation-error {
+        outline: 1px dashed firebrick;
+        outline-offset: -1px;
+    }
+
+    // For text inputs flagged by the validator (adapter ip/com/uuid/model
+    // pointed at by a schema error), match the pink treatment that empty
+    // required fields get via `:required:invalid` so the user can see the
+    // specific input at fault, not just the dashed card outline.
+    input.has-validation-error {
+        border-color: #d97777;
+        background: #fff5f5;
+    }
+
+    // Flagged serial-settings labels: tint the select to match the pink
+    // background used by `:required:invalid` text inputs so the error reads
+    // the same way across all input types instead of being a faint dashed
+    // outline on an otherwise-normal-looking dropdown.
+    .settings-grid > label.has-validation-error {
+        padding: 0 0.25rem;
+        border-radius: 3px;
+        background: #fff5f5;
+
+        select {
+            border-color: #d97777;
+            background: #fff5f5;
+        }
+    }
 }
 
 // Cascade the invalid-input hint up through every wrapping container so a

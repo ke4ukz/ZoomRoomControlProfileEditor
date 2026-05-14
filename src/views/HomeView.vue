@@ -16,6 +16,7 @@
             <div id="builder-column">
                 <BuilderPanel
                     :profile="rawProfile"
+                    :errorTargets="errorTargets"
                     @update:json="onBuilderEdit"
                     @download="onDownload" />
             </div>
@@ -92,6 +93,12 @@
                                     <li
                                         v-for="(w, i) in validationWarnings"
                                         :key="i">
+                                        <a
+                                            v-if="w.line"
+                                            class="warning-line"
+                                            href="#"
+                                            :title="`Jump to line ${w.line}`"
+                                            @click.prevent="jumpToLine(w.line)">line {{ w.line }}</a>
                                         <code>{{ w.path }}</code>: {{ w.message }}
                                     </li>
                                 </ul>
@@ -142,6 +149,7 @@
                                         v-for="(scene, i) in visibleScenes"
                                         :key="i"
                                         class="btn-scene"
+                                        :class="{ 'preview-error': errorTargets.scenes.has(scene.id) }"
                                         @click="sceneClick(scene)">
                                         <span
                                             v-if="scene.icon && scene.icon.startsWith('mdi:')"
@@ -162,7 +170,8 @@
                                 <div
                                     v-for="(port, pi) in adapter.ports"
                                     :key="pi"
-                                    class="port">
+                                    class="port"
+                                    :class="{ 'preview-error': errorTargets.ports.has(ai + ':' + (port.id || ('#' + pi))) }">
                                     <div class="header method">
                                         <div class="method-label">
                                             <span
@@ -193,6 +202,10 @@
                                                             :class="{
                                                                 'btn-rectangle': param.icon == null,
                                                                 'btn-circle': param.icon != null,
+                                                                'preview-error':
+                                                                    errorTargets.params.has(
+                                                                        ai + ':' + (port.id || ('#' + pi)) + '#' + port.methods.indexOf(port.main_method) + '#' + mi
+                                                                    ),
                                                             }"
                                                             @click="zoomClick(adapter, port, port.main_method, param)">
                                                             <p v-if="!param.icon">
@@ -216,6 +229,10 @@
                                                     :class="{
                                                         'btn-rectangle': port.main_method.icon == null,
                                                         'btn-circle': port.main_method.icon != null,
+                                                        'preview-error':
+                                                            errorTargets.methods.has(
+                                                                ai + ':' + (port.id || ('#' + pi)) + '#' + port.methods.indexOf(port.main_method)
+                                                            ),
                                                     }"
                                                     @click="zoomClick(adapter, port, port.main_method)">
                                                     <p v-if="!port.main_method.icon">
@@ -245,6 +262,8 @@
                                                     'hidden-control':
                                                         !method.visible &&
                                                         !(calculatedControls && calculatedControls.eventOnly),
+                                                    'preview-error':
+                                                        errorTargets.methods.has(ai + ':' + (port.id || ('#' + pi)) + '#' + mi),
                                                 }">
                                                 <div class="method-label">
                                                     <span
@@ -268,6 +287,8 @@
                                                             :class="{
                                                                 'btn-rectangle': param.icon == null,
                                                                 'btn-circle': param.icon != null,
+                                                                'preview-error':
+                                                                    errorTargets.params.has(ai + ':' + (port.id || ('#' + pi)) + '#' + mi + '#' + ppi),
                                                             }"
                                                             @click="zoomClick(adapter, port, method, param)">
                                                             <p v-if="!param.icon">
@@ -324,13 +345,6 @@
                             <div class="log-drawer-header">
                                 <span class="log-title">Activity Log</span>
                                 <button
-                                    v-if="logEntries.length > 0"
-                                    class="log-clear"
-                                    title="Clear log"
-                                    @click="clearLog">
-                                    Clear
-                                </button>
-                                <button
                                     class="log-close"
                                     title="Hide log"
                                     @click="logVisible = false">
@@ -363,6 +377,16 @@
                                     </ul>
                                 </div>
                             </div>
+                            <div
+                                v-if="logEntries.length > 0"
+                                class="log-drawer-footer">
+                                <button
+                                    class="log-clear"
+                                    title="Clear log"
+                                    @click="clearLog">
+                                    Clear
+                                </button>
+                            </div>
                         </aside>
                     </div>
                 </Pane>
@@ -382,7 +406,8 @@
                                     :extensions="cmExtensions"
                                     :indent-with-tab="true"
                                     :tab-size="4"
-                                    placeholder="// JSON profile..." />
+                                    placeholder="// JSON profile..."
+                                    @ready="onCmReady" />
                             </div>
                         </Pane>
                         <Pane
@@ -421,12 +446,13 @@
                                                 v-for="(c, i) in commands"
                                                 :key="i"
                                                 class="command-row">
-                                                <span v-if="c.ref" class="command-ref">{{ c.ref }} →</span>
                                                 <template v-if="c.error">
                                                     <span class="command-error">unresolved: {{ c.error }}</span>
                                                 </template>
                                                 <template v-else>
-                                                    <span class="command-address">{{ c.address }}:</span>
+                                                    <span
+                                                        class="command-address"
+                                                        :class="{ 'command-missing': !c.address }">{{ c.address || '<NO_ADDRESS>' }}:</span>
                                                     <pre class="command-text"><span v-for="(seg, j) in splitCommand(c.command)" :key="j" :class="{ ws: seg.ws }">{{ seg.text }}</span></pre>
                                                 </template>
                                             </div>
@@ -601,6 +627,10 @@ export default {
         logEntries: [],
         logVisible: false,
         logUnreadCount: 0,
+        // Non-reactive container for CodeMirror's EditorView. Vue 3 reserves
+        // `_`/`$` -prefixed property names, so we hang the view off a regular
+        // wrapper object instead of a bare `this._cmView = ...` assignment.
+        cmRefs: { view: null },
         // True while a file is being dragged over the editor — shows the
         // "Drop a profile JSON file" overlay. `_dragDepth` is an internal
         // counter so nested elements firing dragenter/leave don't make the
@@ -649,7 +679,10 @@ export default {
                 this.pushLog({
                     level: 'warn',
                     message: `Validation: ${newCount} warning${newCount === 1 ? '' : 's'}`,
-                    details: newWarnings.map((w) => `${w.path}: ${w.message}`),
+                    details: newWarnings.map((w) => {
+                        const prefix = w.line ? `line ${w.line} — ` : '';
+                        return `${prefix}${w.path}: ${w.message}`;
+                    }),
                 });
             }
         },
@@ -759,7 +792,13 @@ export default {
             });
         },
         zoomClick(adapter, port, method, param) {
-            const ref = param ? `${port.id}.${method.id}.${param.id}` : `${port.id}.${method.id}`;
+            // Substitute empty id segments with an obvious placeholder so a
+            // missing-id error doesn't read as "port..param" (which is easy
+            // to skim past as if it were just a leading-dot rendering glitch).
+            const seg = (x) => (x ? x : '<MISSING_ID>');
+            const ref = param
+                ? `${seg(port.id)}.${seg(method.id)}.${seg(param.id)}`
+                : `${seg(port.id)}.${seg(method.id)}`;
             this.target = ref;
             const fc = formatCommand(adapter, port, method, param);
             this.commands = [{ ref, address: fc.address, command: fc.command }];
@@ -779,10 +818,56 @@ export default {
         onResize(name, panes) {
             saveSizes(name, panes);
         },
+        jumpToLine(line) {
+            const view = this.cmRefs.view;
+            if (!view || !line) return;
+            // CM6 line numbers are 1-based; the doc model also indexes lines
+            // from 1. Move the cursor to the start of that line and scroll
+            // it into view.
+            const doc = view.state.doc;
+            const safeLine = Math.max(1, Math.min(line, doc.lines));
+            const lineInfo = doc.line(safeLine);
+            view.dispatch({
+                selection: { anchor: lineInfo.from, head: lineInfo.from },
+                scrollIntoView: true,
+            });
+            view.focus();
+        },
+        onCmReady(payload) {
+            // Hang on to the EditorView so we can read/write scroll position
+            // when the builder pushes JSON updates from the other pane.
+            // Stored on the non-reactive shared `cmRefs` (NOT a `_`-prefixed
+            // instance prop, since Vue 3 reserves `_` / `$` prefixes for its
+            // own internals and won't proxy reads back through `this`).
+            this.cmRefs.view = payload && payload.view;
+        },
         onBuilderEdit(jsonText) {
-            // BuilderPanel now emits the serialized JSON text directly so it
-            // can include duplicate keys in the info section (impossible from
-            // a plain object via JSON.stringify). We just install it as-is.
+            // BuilderPanel emits the serialized JSON text. Going through the
+            // v-model would force vue-codemirror to redispatch a full-doc
+            // replace via its async watcher, by which time the editor has
+            // already snapped scroll to the top. Sidestep the model entirely
+            // when we have direct access to the view: capture scroll, swap
+            // the document, restore scroll — synchronously AND on the next
+            // frame in case CodeMirror's own measure cycle resets it after
+            // we run. vue-codemirror's setDoc guards with `new !== current`
+            // so its own watcher then no-ops.
+            if (this.json === jsonText) return;
+            const view = this.cmRefs.view;
+            if (view) {
+                const prevScroll = view.scrollDOM.scrollTop;
+                view.dispatch({
+                    changes: { from: 0, to: view.state.doc.length, insert: jsonText },
+                });
+                view.scrollDOM.scrollTop = prevScroll;
+                // CM6 schedules a measure pass via rAF after a transaction;
+                // restore scroll after that pass too in case it snapped to
+                // top while we weren't looking.
+                requestAnimationFrame(() => {
+                    if (view.scrollDOM.scrollTop !== prevScroll) {
+                        view.scrollDOM.scrollTop = prevScroll;
+                    }
+                });
+            }
             this.json = jsonText;
         },
         dragHasFile(event) {
@@ -880,6 +965,132 @@ export default {
         },
     },
     computed: {
+        // Resolve every error's JSON pointer back to the port / method / param
+        // it touches, so the preview can paint a "this has a problem" hint
+        // directly on the rendered control. Errors bubble: a param error also
+        // flags its parent method and port, a method error flags its port.
+        //
+        // Methods and params are keyed by INDEX (not id) so a control whose
+        // own id is empty/missing still gets the indicator — id-based keys
+        // would silently no-op on the very case the user most needs to see.
+        // Indices match between rawProfile and calculatedControls because the
+        // transform never reorders methods/params, only annotates them.
+        errorTargets() {
+            const ports = new Set();
+            const methods = new Set();
+            const params = new Set();
+            const settings = new Set(); // "<portKey>#<settingField>"
+            const portsWithSettingsError = new Set(); // <portKey>
+            const scenes = new Set();
+            const adapters = new Set(); // adapter-index keys, e.g. "0"
+            const adapterFields = new Set(); // "<adapterIndex>#<field>" for ip/com/uuid/model errors
+            const json = this.rawProfile;
+            if (!json) {
+                return { ports, methods, params, settings, scenes, adapters, adapterFields };
+            }
+            for (const w of this.validationWarnings) {
+                const ptr = w.pointer;
+                if (!ptr) continue;
+                // /adapters/N(/ports/M(/settings/<field> | /methods/K(/params/P)?)?)?
+                let m = /^\/adapters\/(\d+)(?:\/ports\/(\d+)(?:\/(settings|methods)\/([^/]+)(?:\/params\/(\d+))?)?)?/.exec(ptr);
+                if (m) {
+                    const ai = Number(m[1]);
+                    adapters.add(String(ai));
+                    if (m[2] == null) {
+                        // Adapter-level pointer. Capture the specific field
+                        // (ip / com / uuid / model) for input-level highlight
+                        // in the builder. Two emission shapes from AJV:
+                        //   - pattern / enum / type failures point at the
+                        //     field: /adapters/0/ip
+                        //   - required-field misses point at the parent and
+                        //     carry the missing key in err.params:
+                        //     /adapters/0 with missingProperty 'ip'
+                        const tail = ptr.slice(`/adapters/${ai}`.length);
+                        if (tail.startsWith('/')) {
+                            const field = tail.slice(1).split('/')[0];
+                            if (field) adapterFields.add(`${ai}#${field}`);
+                        } else if (w.source === 'schema' && w.message) {
+                            // Pull the missing key out of "required field 'X'".
+                            const mm = /required field '([^']+)'/.exec(w.message);
+                            if (mm) adapterFields.add(`${ai}#${mm[1]}`);
+                        }
+                        continue;
+                    }
+                    const adapter = json.adapters && json.adapters[ai];
+                    const port = adapter && adapter.ports && adapter.ports[Number(m[2])];
+                    // Qualify the port key with the adapter index. Two ports
+                    // on different adapters can share an id (Zoom allows it)
+                    // and unnamed ports both default to `#0` — without the
+                    // adapter prefix, an error on one would falsely tag the
+                    // other.
+                    const portKey = `${ai}:${port && port.id ? port.id : `#${Number(m[2])}`}`;
+                    ports.add(portKey);
+                    if (m[3] === 'settings') {
+                        settings.add(`${portKey}#${m[4]}`);
+                        portsWithSettingsError.add(portKey);
+                    } else if (m[3] === 'methods') {
+                        const mi = Number(m[4]);
+                        methods.add(`${portKey}#${mi}`);
+                        if (m[5] != null) {
+                            params.add(`${portKey}#${mi}#${Number(m[5])}`);
+                        }
+                    }
+                    continue;
+                }
+                // /scenes/N
+                m = /^\/scenes\/(\d+)/.exec(ptr);
+                if (m) {
+                    const scene = json.scenes && json.scenes[Number(m[1])];
+                    if (scene && scene.id) scenes.add(scene.id);
+                    continue;
+                }
+            }
+            // Bubble errors down through the hierarchy so the preview lights
+            // up every visible control that's affected:
+            //   - Adapter-level errors (missing ip / com / uuid, model
+            //     mismatches, etc.) → every port under that adapter, and
+            //     every method/param under those ports. If the adapter
+            //     can't connect, none of its controls will work.
+            //   - Port serial-settings errors → every method/param on that
+            //     port. A bad baud / parity / data_bits breaks every command
+            //     the device speaks.
+            // Note: errors that originally pointed at a specific port path
+            // already had ports.add(portKey) called inside the main loop, so
+            // the per-port bubble below covers them too.
+            if (Array.isArray(json.adapters)) {
+                json.adapters.forEach((adapter, ai) => {
+                    if (!adapter || !Array.isArray(adapter.ports)) return;
+                    const adapterHasError = adapters.has(String(ai));
+                    adapter.ports.forEach((port, pi) => {
+                        if (!port) return;
+                        const portKey = `${ai}:${port.id ? port.id : `#${pi}`}`;
+                        const portHasError =
+                            adapterHasError ||
+                            portsWithSettingsError.has(portKey) ||
+                            ports.has(portKey);
+                        if (!portHasError) return;
+                        // Adapter-level errors weren't otherwise associated
+                        // with a port; surface them on every port card.
+                        if (adapterHasError) ports.add(portKey);
+                        if (!Array.isArray(port.methods)) return;
+                        // Only bubble down to methods/params when the failure
+                        // actually affects the wire (adapter or settings).
+                        // A port-level error like a missing port id doesn't
+                        // automatically mean every command is broken.
+                        if (!adapterHasError && !portsWithSettingsError.has(portKey)) return;
+                        port.methods.forEach((method, mi) => {
+                            methods.add(`${portKey}#${mi}`);
+                            if (method && Array.isArray(method.params)) {
+                                method.params.forEach((_p, ppi) => {
+                                    params.add(`${portKey}#${mi}#${ppi}`);
+                                });
+                            }
+                        });
+                    });
+                });
+            }
+            return { ports, methods, params, settings, scenes, adapters, adapterFields };
+        },
         logButtonTitle() {
             if (this.logVisible) return 'Hide activity log';
             const n = this.logUnreadCount;
@@ -1306,6 +1517,24 @@ $zoom-button-height: 58px;
             }
         }
 
+        .warning-line {
+            display: inline-block;
+            margin-right: 0.35rem;
+            padding: 0 4px;
+            border-radius: 3px;
+            background: rgba(120, 53, 15, 0.12);
+            color: inherit;
+            text-decoration: none;
+            font-size: 0.72rem;
+            font-weight: 600;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+
+            &:hover {
+                background: rgba(120, 53, 15, 0.22);
+                text-decoration: underline;
+            }
+        }
+
         code {
             font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
             font-size: 0.78rem;
@@ -1359,6 +1588,22 @@ $zoom-button-height: 58px;
         gap: 1rem;
         width: $zoom-panel-width;
         flex-shrink: 0;
+
+        // Validator-flagged controls in the rendered preview. Outline (not
+        // border) so toggling on/off doesn't reflow the layout. The default
+        // -2px offset hugs the inside of card edges; buttons override with
+        // -1px so the dashes sit closer to the rounded corner.
+        // Compiles to `#zoom-controls .preview-error` so .port itself
+        // matches (the rule used to be nested inside .port, which produced
+        // `.port .preview-error` and missed the .port element itself).
+        .preview-error {
+            outline: 2px dashed firebrick;
+            outline-offset: -2px;
+        }
+        .btn-zoom.preview-error,
+        .btn-scene.preview-error {
+            outline-offset: -1px;
+        }
 
         // When zr_event_only=true is set and the user has chosen to peek, the
         // whole UI is "hidden" in production — dash + dim the container to
@@ -1638,6 +1883,11 @@ $zoom-button-height: 58px;
                 }
             }
 
+            // (The `.preview-error` rules used to live here, but nesting them
+            // inside `.port` compiled to `.port .preview-error` — which only
+            // matches descendants, never the port itself. Moved out below so
+            // the port card can carry the indicator too.)
+
             .method-label {
                 display: flex;
                 flex-direction: row;
@@ -1834,6 +2084,11 @@ $zoom-button-height: 58px;
                 font-family: inherit;
             }
 
+            .command-missing {
+                color: firebrick;
+                font-style: italic;
+            }
+
             .command-ref {
                 font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
                 font-size: 0.82rem;
@@ -1909,19 +2164,6 @@ $zoom-button-height: 58px;
         margin-right: auto;
     }
 
-    .log-clear {
-        @include b.btn-shared;
-        background: transparent;
-        border: 1px solid c.$border;
-        border-radius: 3px;
-        padding: 0.1rem 0.5rem;
-        font-size: 0.72rem;
-        color: c.$text-dark;
-        opacity: 0.75;
-
-        &:hover { opacity: 1; background: #f4f4f5; }
-    }
-
     .log-close {
         @include b.btn-shared;
         background: transparent;
@@ -1935,6 +2177,30 @@ $zoom-button-height: 58px;
 
         .material-icons { font-size: 18px; }
         &:hover { opacity: 1; }
+    }
+}
+
+// Footer sits below the scroller, holding the Clear button out of the way
+// of the close button at the top so it's harder to mis-click when reaching
+// for "hide log."
+.log-drawer-footer {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: flex-end;
+    padding: 0.35rem 0.5rem;
+    border-top: 1px solid c.$border;
+
+    .log-clear {
+        @include b.btn-shared;
+        background: transparent;
+        border: 1px solid c.$border;
+        border-radius: 3px;
+        padding: 0.15rem 0.6rem;
+        font-size: 0.72rem;
+        color: c.$text-dark;
+        opacity: 0.75;
+
+        &:hover { opacity: 1; background: #f4f4f5; }
     }
 }
 

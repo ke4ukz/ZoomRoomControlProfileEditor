@@ -1,0 +1,61 @@
+﻿Type,Event,String,Notes
+Meeting,,,
+Meeting,Meeting Started,zr_meeting_started,
+Meeting,Meeting Ended,zr_meeting_ended,
+Meeting,Meeting Started,zr_zoom_meeting_started,"This command was added to differentiate between regular meetings and interop meetings, however, the meeting_started and meeting_ended commands are still supported. "
+Meeting,Meeting Ended,zr_zoom_meeting_ended,"This command was added to differentiate between regular meetings and interop meetings, however, the meeting_started and meeting_ended commands are still supported. "
+Meeting,Meeting Started,zr_interop_meeting_started,
+Meeting,Meeting Ended,zr_interop_meeting_ended,
+Meeting,Incoming Meeting Invite Start,zr_meeting_ring_started,
+Meeting,Incoming Meeting Invite End,zr_meeting_ring_ended,
+,Next Meeting Alert Triggered,zr_meeting_item_about_to_start,
+,Meeting List Item Start,zr_meeting_item_start,
+,Meeting List Item Stop,zr_meeting_item_stop,
+Phone,,,
+Phone,Incoming Phone Call Start,zr_phone_ring_started,"Any type of phone interaction (Zoom Phone, Audio Plan, 3rd Party PBX) will trigger this command"
+,,,
+Phone,Incoming Phone Call End,zr_phone_ring_ended,All phone ring types must be inactive to trigger this event
+,,,
+Phone,Phone Call Started,zr_phone_call_started,PSTN Invites within an active meeting will not trigger this event
+,,,
+Phone,Phone Call Ended,zr_phone_call_ended,
+,,,
+In-Meeting,,,
+In-Meeting - Video,Video On (Camera Mute Off),zr_video_started,
+In-Meeting - Video,Video Off (Camera Mute On),zr_video_stopped,
+In-Meeting - Video,Selected Video Device Changed,zr_video_device_changed,Video device change event is only triggered when the main selected device changes. Multi-camera changes will not trigger this event.
+In-Meeting - Audio,Mic On,zr_microphone_unmuted,
+,(Mic Unmuted),,
+In-Meeting - Audio,Mic Off,zr_microphone_muted,
+,(Mic Muted),,
+In-Meeting - Audio,Selected Audio Device Changed,zr_audio_device_changed,Audio device change event is only triggered when the main selected device changes. Dante mic channel change will not trigger this event.
+In-Meeting - Content,Wireless Sharing Started,zr_share_started,"Applies to direct share, whiteboard camera share, camera share, zoom apps sharing, and Apple Airplay (for multiple simultaneous shares, only the first command is sent). Digital Signage will not trigger these events."
+In-Meeting - Content,Wireless Sharing Ended,zr_share_ended,This command is sent when the last of multiple shares ends.  Digital Signage will not trigger these events.
+In-Meeting - Content,HDMI Sharing Started,zr_hdmi_share_started,Digital Signage will not trigger these events.
+In-Meeting - Content,HDMI Sharing Stopped,zr_hdmi_share_ended,Digital Signage will not trigger these events.
+In-Meeting - Recording,Recording Started,zr_recording_started,
+In-Meeting - Recording,Recording Stopped,zr_recording_ended,
+Elevation,Meeting elevation,zr_elevate_to_meeting,This event triggers when a Zoom Room engaged in a telephony or screen-sharing session elevates the session to a video meeting.
+Pairing,,,
+Pairing,User Paired to ZR,zr_user_paired,Each user will trigger a generalized pairing event.
+Pairing,User Unpaired from ZR,zr_user_unpaired,All users unpaired will trigger a generalized unpairing event.
+Digital Signage,,,
+Digital Signage,Digital Signage Begins,zr_digital_signage_started,
+Digital Signage,Digital Signage is dismissed,zr_digital_signage_ended,
+Whiteboard,,,
+Whiteboard,Whiteboarding opened,zr_whiteboard_started,"Applies to Classic Whiteboard, New Whiteboard, and in-meeting whiteboards"
+Whiteboard,Whiteboarding closed,zr_whiteboard_ended,"Applies to Classic Whiteboard, New Whiteboard, and in-meeting whiteboards"
+Whiteboard,Companion Whiteboard is added to the Zoom Room,zr_companion_whiteboard_connected,
+Whiteboard,Companion Whiteboard is removed from the Zoom Room,zr_companion_whiteboard_disconnected,
+Admin,,,
+Operation Time,Operation Time Begins,zr_operation_time_started,
+Operation Time,Operation Time Ends,zr_operation_time_ended,
+People Detection,People Detected,zr_people_detected,Only applicable to hardware layer people detection
+People Detection,No People Detected,zr_people_not_detected,Only applicable to hardware layer people detection
+Voice Commands,Voice Commands are enabled,zr_voice_command_on,
+Voice Commands,Voice Commands are disabled,zr_voice_command_off,
+Zoom Apps,Zoom App is opened,zr_zoom_app_opened,"Opening any app will trigger this event, even if an app is already open in the meeting."
+Zoom Apps,Zoom App is closed,zr_zoom_app_closed,"Closing any app will trigger this event, even if another app is still active in the meeting."
+Admin,Room Controls is Opened,zr_room_controls_opened,
+Admin,Room Controls is Closed,zr_room_controls_closed,
+Admin,Zoom Rooms Startup Completed,zr_room_startup_completed,"Zoom Room startup, login, and Room Controls loading completed"

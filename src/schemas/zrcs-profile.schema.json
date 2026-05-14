@@ -133,7 +133,8 @@
         },
         "uuid": {
           "type": "string",
-          "description": "iTach beacon UUID (e.g. 'GlobalCache_000C1E051AEE'). Used for auto-discovery via UDP multicast when 'ip' is not provided."
+          "description": "iTach beacon UUID (e.g. 'GlobalCache_000C1E051AEE'). Required for Global Caché (iTach*) adapters; not used by other models. Format is 'GlobalCache_' followed by the device's 12-hex-digit MAC.",
+          "pattern": "^GlobalCache_[0-9A-Fa-f]{12}$"
         },
         "com": {
           "type": "string",
@@ -182,6 +183,9 @@
             ]
           },
           "then": {
+            "required": [
+              "uuid"
+            ],
             "not": {
               "required": [
                 "com"
@@ -220,6 +224,9 @@
             ]
           },
           "then": {
+            "required": [
+              "uuid"
+            ],
             "not": {
               "required": [
                 "com"
