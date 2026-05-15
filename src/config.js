@@ -7,10 +7,8 @@ export const SCHEMA_URL =
     'https://cdn.jsdelivr.net/gh/SpectrumIntegrators/PublicSchemas@main/ZoomRoomsControlProfile/v1/zrcs-profile.schema.json';
 
 // Stamped into `info.tool` on new profiles and on download so downstream
-// consumers can trace the file back to this editor. Replace with the real
-// hosted URL once we have one.
-export const EDITOR_URL =
-    'https://github.com/SpectrumIntegrators/ZoomRoomControlProfileEditor';
+// consumers can trace the file back to this editor.
+export const EDITOR_URL = 'https://zoom.spectrumintegrators.com';
 
 // YYYY-MM-DD in local time. Date.toISOString uses UTC, which can drift a day
 // off near midnight; build the string from local components.
