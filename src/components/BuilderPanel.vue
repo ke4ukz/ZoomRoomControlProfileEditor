@@ -27,6 +27,12 @@
                     @click="$emit('download')">
                     <span class="material-icons">download</span>
                 </button>
+                <button
+                    class="btn-icon btn-icon-help"
+                    title="Editing tips"
+                    @click="helpVisible = true">
+                    <span class="material-icons">help_outline</span>
+                </button>
             </div>
         </header>
 
@@ -166,9 +172,8 @@
                         type="text"
                         class="adapter-uuid"
                         :class="{ 'has-validation-error': errorTargets.adapterFields.has(ai + '#uuid') }"
-                        placeholder="GlobalCache_<MAC>"
-                        title="iTach beacon UUID, e.g. GlobalCache_000C1E051AEE"
-                        required
+                        placeholder="GlobalCache_<MAC> (optional)"
+                        title="iTach beacon UUID, e.g. GlobalCache_000C1E051AEE. Optional — Zoom doesn't use it, but recording it makes the profile self-documenting."
                         pattern="^GlobalCache_[0-9A-Fa-f]{12}$"
                         v-model="adapter.uuid" />
                     <button
@@ -648,6 +653,15 @@
 
             <!-- ============== RESPONSE FILTERS ============== -->
             <h3 class="section-title">Response Filters</h3>
+            <p
+                v-if="Array.isArray(localProfile.response_filters) && localProfile.response_filters.length > 0"
+                class="section-hint">
+                Type the regex as you'd write it in JavaScript / std::regex (e.g.
+                <code>[\s\S]*Login:</code>) — the editor handles JSON
+                double-escaping for you. Real control characters in your input
+                show as <code>\r</code> / <code>\n</code> / <code>\t</code> for
+                visibility.
+            </p>
             <div
                 v-for="(filter, fi) in localProfile.response_filters"
                 :key="'filter-' + fi"
@@ -672,8 +686,10 @@
                         <span class="kv-key">regex</span>
                         <input
                             type="text"
-                            v-model="filter.filter_regex"
+                            :value="displayRegex(filter.filter_regex)"
+                            @input="filter.filter_regex = $event.target.value"
                             placeholder="filter_regex"
+                            title="Control characters (CR / LF / TAB) are shown as \r \n \t escape sequences for visibility — the regex engine treats them the same as the raw bytes."
                             required />
                     </label>
                     <label class="kv-row">
@@ -696,6 +712,239 @@
                 @click="addFilter">
                 + Filter
             </button>
+        </div>
+
+        <!-- Editing tips popup. Modal-style: click the backdrop OR the close
+             button OR press Escape to dismiss. Lives at the bottom of the
+             builder so its stacking context covers the whole panel. -->
+        <div
+            v-if="helpVisible"
+            class="help-backdrop"
+            @click.self="helpVisible = false"
+            @keydown.esc="helpVisible = false"
+            tabindex="-1"
+            ref="helpBackdrop">
+            <div class="help-card" role="dialog" aria-label="Editing tips and confirmed behavior">
+                <header class="help-card-header">
+                    <div class="help-tabs" role="tablist">
+                        <button
+                            type="button"
+                            role="tab"
+                            class="help-tab"
+                            :class="{ active: helpActiveTab === 'tips' }"
+                            :aria-selected="helpActiveTab === 'tips'"
+                            @click="helpActiveTab = 'tips'">
+                            Editing Tips
+                        </button>
+                        <button
+                            type="button"
+                            role="tab"
+                            class="help-tab"
+                            :class="{ active: helpActiveTab === 'quirks' }"
+                            :aria-selected="helpActiveTab === 'quirks'"
+                            @click="helpActiveTab = 'quirks'">
+                            Undocumented but Confirmed Behavior
+                        </button>
+                    </div>
+                    <button
+                        class="help-close"
+                        title="Close"
+                        @click="helpVisible = false">
+                        <span class="material-icons">close</span>
+                    </button>
+                </header>
+                <div
+                    v-if="helpActiveTab === 'tips'"
+                    class="help-card-body"
+                    role="tabpanel">
+                    <section>
+                        <h3>Backslashes and JSON</h3>
+                        <p>
+                            In the actual JSON file, escape sequences like
+                            <code>\xFF</code> have to be written with two
+                            backslashes (<code>\\xFF</code>) for the JSON
+                            parser. This gets messy fast, especially with
+                            filter regexes. This editor handles the
+                            double-escaping for you, so in every
+                            <code>command</code>, <code>value</code>, and
+                            <code>filter_regex</code> field you can just use
+                            a single backslash as normal.
+                        </p>
+                    </section>
+                    <section>
+                        <h3>Command strings (port → device)</h3>
+                        <p>
+                            A method's <code>command</code> is the raw bytes
+                            sent on the wire. Use <code>\r</code>,
+                            <code>\n</code>, <code>\t</code> for control
+                            characters and <code>\xNN</code> for any
+                            arbitrary byte (<code>\xFF</code>,
+                            <code>\x02</code>, etc.). Zoom decodes these at
+                            send time; the byte that hits the device is the
+                            single character each escape represents.
+                        </p>
+                        <p>
+                            For methods with <code>type: "actions"</code>,
+                            <code>%</code> in the command string is replaced
+                            with the matched param's <code>value</code> at
+                            send time. Add a <code>params</code> array and
+                            use <code>%</code> as the placeholder. If it's
+                            <code>type: "action"</code> (singular), the
+                            <code>%</code> is just sent as a literal percent
+                            character.
+                        </p>
+                    </section>
+                    <section>
+                        <h3>Regex flavor for response filters</h3>
+                        <p>
+                            Zoom uses MSVC <code>std::regex</code> with the
+                            ECMAScript flavor — equivalent to JavaScript's
+                            <code>RegExp</code>. To test patterns externally,
+                            use
+                            <a href="https://regex101.com" target="_blank" rel="noopener noreferrer">regex101.com</a>
+                            with <strong>"JavaScript" flavor selected</strong>.
+                            Don't tick the <code>s</code> (dotAll) flag — it
+                            postdates Zoom's regex engine. Use
+                            <code>[\s\S]</code> when you would need
+                            <code>.</code> to also match newlines.
+                        </p>
+                        <p>
+                            <strong>Whole-input match.</strong> Zoom uses
+                            <code>regex_match</code>, not
+                            <code>regex_search</code> — the entire received
+                            buffer has to match your pattern, not just
+                            contain it. To match a string anywhere inside a
+                            larger reply, wrap your pattern with
+                            <code>[\s\S]*</code> on both sides. For example,
+                            looking for a login prompt: use
+                            <code>[\s\S]*Login:[\s\S]*</code>, not just
+                            <code>Login:</code>.
+                        </p>
+                        <p>
+                            Captured groups don't pass through to rule
+                            handlers — filters fire by name only. Use the
+                            response-injection panel (in the activity log
+                            drawer) to test patterns against simulated
+                            device replies.
+                        </p>
+                        <p>
+                            <strong>ASCII-only.</strong> Zoom's receive
+                            pipeline runs incoming bytes through a UTF-8
+                            decoder before the regex sees them, so bytes
+                            <code>0x80</code>–<code>0xFF</code> are dropped
+                            (lone continuation bytes are invalid UTF-8) and
+                            never reach the matcher. Patterns like
+                            <code>\xAA</code> or <code>\xFF</code> won't
+                            fire against real device output. If the device
+                            sends raw binary, match on a nearby ASCII
+                            status code instead.
+                        </p>
+                    </section>
+                    <section>
+                        <h3>Comments</h3>
+                        <p>
+                            The <code>$comment</code> field on any block
+                            (info, adapter, port, method, param, scene, rule,
+                            filter) is ignored by Zoom and by schema
+                            validation. Free-form notes for whoever opens
+                            the profile next. Add one with the
+                            <code>+ Comment</code> button on any item.
+                        </p>
+                    </section>
+                </div>
+                <div
+                    v-else
+                    class="help-card-body"
+                    role="tabpanel">
+                    <p class="help-quirks-intro">
+                        These are behaviors Zoom Rooms enforces (or exhibits)
+                        at profile-load and run time that aren't expressible
+                        in the JSON Schema. The validator catches the ones it
+                        can so you don't find out in a customer's room with
+                        them standing there.
+                    </p>
+                    <ul class="help-quirks">
+                        <li>
+                            <strong>Response filters don't work on USB2Serial
+                            adapters.</strong> Zoom rejects profiles where a
+                            <code>port.response_filter</code> is set on a
+                            USB2Serial port.
+                        </li>
+                        <li>
+                            <strong><code>response_filter.trigger_event</code>
+                            cannot shadow a built-in <code>zr_*</code>
+                            event.</strong> Zoom rejects profiles where a
+                            custom filter trigger collides with one of the
+                            built-in event names (see
+                            <code>doc/zoom_events.csv</code> in the repo).
+                        </li>
+                        <li>
+                            <strong><code>response_filter.trigger_event</code>
+                            must reference a rule that exists.</strong> A
+                            filter pointing at an undefined rule key is
+                            rejected.
+                        </li>
+                        <li>
+                            <strong>Rule and scene command arrays must not
+                            be empty.</strong> If a rule's commands or a
+                            scene's commands list is <code>[]</code>, Zoom
+                            rejects the profile at parse time. The builder catches
+                            this before the JSON ever reaches Zoom.
+                        </li>
+                        <li>
+                            <strong>Port ids should be unique across all
+                            adapters.</strong> The validator flags duplicates at
+                            edit time.
+                        </li>
+                        <li>
+                            <strong>Rule keys are case-sensitive.</strong>
+                            <code>meeting_started</code> and
+                            <code>Meeting_started</code> are different
+                            rules. The schema's pattern check enforces this
+                            in both directions, but it's worth knowing.
+                        </li>
+                        <li>
+                            <strong>Response filters dispatch all-match, not
+                            first-match.</strong> When data arrives on a
+                            port, Zoom evaluates <em>every</em> filter
+                            assigned to that port and fires the
+                            <code>trigger_event</code> of every one whose
+                            regex matches.
+                        </li>
+                        <li>
+                            <strong>The pattern must match the <em>entire</em> received
+                            buffer</strong>. Wrap patterns with
+                            <code>[\s\S]*</code> on both sides to absorb
+                            surrounding content (e.g.
+                            <code>[\s\S]*Login:[\s\S]*</code>).
+                        </li>
+                        <li>
+                            <strong>Response filter matching is per-chunk,
+                            not per-line.</strong> Each receive callback
+                            regexes whatever was delivered. If a device
+                            fragments its reply across TCP packets, each
+                            fragment is matched independently — a regex
+                            that needs to see the full reply will be
+                            unreliable on slow / chatty connections.
+                        </li>
+                        <li>
+                            <strong>Response filter regex flavor is MSVC
+                            <code>std::regex</code> ECMAScript.</strong>
+                            JavaScript's <code>RegExp</code> implements the
+                            same dialect, so the simulator and Zoom match
+                            identically for practical ASCII patterns.
+                        </li>
+                        <li>
+                            <strong>Response filter matching is ASCII-only
+                            in practice.</strong> Bytes from `0x80` to `0xff`
+                            cannot be used in the filter regex.
+                            Match on printable status codes instead. If
+                            the protocol is purely binary, response
+                            filters are not the right tool.
+                        </li>
+                    </ul>
+                </div>
+            </div>
         </div>
     </section>
 </template>
@@ -1048,6 +1297,13 @@ export default {
             // whose dropdown is currently expanded. Tracked at the component
             // level rather than per-adapter so opening one closes the others.
             openModelDropdownIndex: -1,
+            // Editing-tips modal visibility. Help button in the builder
+            // header toggles it; Escape and backdrop click close it.
+            helpVisible: false,
+            // Active tab inside the help popup. Resets to 'tips' on each
+            // open so a returning user lands on the default tab unless
+            // they explicitly navigated to the quirks list.
+            helpActiveTab: 'tips',
             // Info rendered as an ordered array of {id, key, value} rather
             // than as the underlying object's keys so duplicate keys can
             // coexist visually. The entries->info pipeline collapses
@@ -1125,6 +1381,18 @@ export default {
         document.removeEventListener('click', this.closeModelDropdown);
     },
     watch: {
+        // Focus the help modal's backdrop when it opens so the Escape key
+        // handler (@keydown.esc on the backdrop element) actually fires —
+        // without focus, the event never reaches it. Also reset to the
+        // default tab so the popup always opens to "Editing Tips" first.
+        helpVisible(isOpen) {
+            if (isOpen) {
+                this.helpActiveTab = 'tips';
+                this.$nextTick(() => {
+                    if (this.$refs.helpBackdrop) this.$refs.helpBackdrop.focus();
+                });
+            }
+        },
         profile: {
             deep: true,
             handler(newProfile) {
@@ -1186,6 +1454,26 @@ export default {
         settingHasError(adapterIndex, port, portIndex, field) {
             const key = adapterIndex + ':' + (port.id || `#${portIndex}`) + '#' + field;
             return this.errorTargets.settings.has(key);
+        },
+        // Render an editable string-with-control-chars as a single visible
+        // line. CR / LF / TAB get shown as `\r` `\n` `\t` escape sequences
+        // so the user can actually see what's in their regex — the bare
+        // `<input>` element strips real control chars on display, which is
+        // how a JSON-source `"\r"` (a literal CR byte after parse) was
+        // ending up invisible in the builder. The regex engine treats the
+        // escape-sequence form and the raw-byte form identically, so any
+        // edit lands in the JSON as escape-sequence text (cleaner JSON).
+        displayRegex(s) {
+            if (typeof s !== 'string') return '';
+            let out = '';
+            for (let i = 0; i < s.length; i++) {
+                const ch = s[i];
+                if (ch === '\r') out += '\\r';
+                else if (ch === '\n') out += '\\n';
+                else if (ch === '\t') out += '\\t';
+                else out += ch;
+            }
+            return out;
         },
         ipPlaceholder(/* model */) {
             // Plain field-name placeholder so empty + required highlight
@@ -1823,6 +2111,183 @@ export default {
     &:disabled {
         opacity: 0.4;
         cursor: not-allowed;
+    }
+}
+
+// Help button sits at the far right of the builder header; the small left
+// margin nudges it away from the New/Open/Download cluster so it reads as a
+// separate "what is this thing?" affordance rather than another doc action.
+.btn-icon-help {
+    margin-left: auto;
+}
+
+// Editing-tips modal. Fixed-position so it covers the whole builder pane;
+// click-outside on the dimmed backdrop dismisses, X button in the card
+// header dismisses, Escape dismisses (via the @keydown.esc binding plus the
+// focus pulse in the watcher).
+.help-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 1rem;
+    outline: none;
+}
+
+.help-card {
+    background: #fff;
+    border-radius: 8px;
+    width: min(640px, 100%);
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+}
+
+// Header strip uses the accent purple — distinct from both the editor's
+// black navbar AND from a dark-mode Zoom preview backdrop, so the modal
+// reads as a clearly different UI surface regardless of what's behind it.
+.help-card-header {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: stretch;
+    padding: 0.4rem 0.5rem 0 0.5rem;
+    background: c.$accent;
+    color: c.$text-light;
+}
+
+.help-tabs {
+    flex: 1 1 auto;
+    display: flex;
+    align-items: stretch;
+    gap: 0.3rem;
+    min-width: 0;
+}
+
+// Tabs styled as physical chips that sit on top of the body card. Inactive
+// tabs are dimmer, smaller-looking pills; the active one is a brighter
+// rectangle whose bottom edge merges with the body (its background matches
+// the body background and overshoots the header's bottom edge by 1px so
+// the border line under inactive tabs visibly doesn't pass through the
+// active one).
+.help-tab {
+    @include b.btn-shared;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    color: c.$text-light;
+    opacity: 0.7;
+    padding: 0.5rem 0.9rem 0.55rem;
+    margin-bottom: -1px;
+    font-size: 0.92rem;
+    font-weight: 500;
+    line-height: 1.2;
+    cursor: pointer;
+    white-space: nowrap;
+
+    &:hover {
+        opacity: 0.95;
+        background: rgba(255, 255, 255, 0.15);
+    }
+
+    &.active {
+        opacity: 1;
+        background: #fff;
+        color: c.$primary;
+        border-color: #fff;
+        font-weight: 600;
+        // Slight lift to make it look like the active tab sits a touch
+        // higher than the inactive ones, reinforcing the chip metaphor.
+        padding-top: 0.6rem;
+        padding-bottom: 0.65rem;
+    }
+}
+
+.help-close {
+    @include b.btn-shared;
+    background: transparent;
+    border: none;
+    color: c.$text-light;
+    padding: 2px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0.7;
+
+    .material-icons { font-size: 20px; }
+    &:hover { opacity: 1; }
+}
+
+.help-card-body {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 1rem 1.25rem;
+    font-size: 0.88rem;
+    line-height: 1.5;
+    color: c.$text-dark;
+
+    section {
+        margin-bottom: 1.1rem;
+
+        &:last-child { margin-bottom: 0; }
+    }
+
+    h3 {
+        margin: 0 0 0.35rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: c.$primary;
+    }
+
+    p {
+        margin: 0 0 0.6rem;
+
+        &:last-child { margin-bottom: 0; }
+    }
+
+    code {
+        background: #efeff4;
+        border-radius: 2px;
+        padding: 0 4px;
+        font-size: 0.92em;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+    }
+
+    a {
+        color: c.$accent;
+        text-decoration: underline;
+    }
+
+    strong {
+        color: c.$primary;
+    }
+
+    // "Undocumented but Confirmed Behavior" tab — intro paragraph + a
+    // densely-packed bulleted list. Slightly tighter line-height than the
+    // tips tab because the list reads as a reference.
+    .help-quirks-intro {
+        color: c.$text-dark;
+        opacity: 0.8;
+        font-style: italic;
+        margin-bottom: 0.9rem;
+    }
+
+    .help-quirks {
+        list-style: disc;
+        padding-left: 1.3rem;
+        margin: 0;
+
+        li {
+            margin-bottom: 0.7rem;
+            line-height: 1.45;
+
+            &:last-child { margin-bottom: 0; }
+        }
     }
 }
 

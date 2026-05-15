@@ -1,5 +1,6 @@
 import Ajv from 'ajv';
 import { schemaState } from './schemaLoader';
+import { BUILTIN_EVENT_SET } from '@/data/builtinEvents';
 
 let cachedSchema = null;
 let cachedValidator = null;
@@ -622,32 +623,144 @@ function runDuplicateKeyValidation(rawText) {
     });
 }
 
-function runQuirkValidation(rawText, json) {
+// Filter-specific rules that Zoom enforces at profile load and that we
+// confirmed by spelunking the installer binary:
+//   - USB2Serial ports cannot carry a response_filter assignment
+//     (ZRCSParser::ParseFilterNames: "usb2serial device do not support
+//     response filter")
+//   - response_filter.trigger_event must reference a rule that exists
+//     (ZRCSParser::ParseResponseFilters: "response_filter event is not
+//     exist")
+//   - response_filter.trigger_event must NOT collide with a built-in zr_*
+//     rule name (ZRCSParser::ParseResponseFilters: "response_filter
+//     trigger_event is same as built-in rule")
+function runResponseFilterValidation(json) {
     const errors = [];
 
-    // Zoom rejects profiles where an empty rule has any whitespace between the
-    // brackets. "meeting_started": [] works; "[ ]" or "[\n]" fails to load even
-    // though it's valid JSON. We can only catch this from the raw source text.
-    if (json.rules && typeof json.rules === 'object') {
-        Object.keys(json.rules).forEach((rule) => {
-            if (rule === '$comment') return;
-            if (Array.isArray(json.rules[rule]) && json.rules[rule].length === 0) {
-                const re = new RegExp('"rules"(.|\\n)*"' + rule + '": \\[\\]');
-                if (!re.test(rawText)) {
-                    const pointer = `/rules/${rule}`;
+    // USB2Serial ports can't have a response_filter assignment.
+    if (Array.isArray(json.adapters)) {
+        json.adapters.forEach((adapter, ai) => {
+            if (!adapter || adapter.model !== 'USB2Serial') return;
+            if (!Array.isArray(adapter.ports)) return;
+            adapter.ports.forEach((port, pi) => {
+                if (!port || !Array.isArray(port.response_filter)) return;
+                if (port.response_filter.length === 0) return;
+                const pointer = `/adapters/${ai}/ports/${pi}/response_filter`;
+                errors.push({
+                    source: 'response-filter',
+                    pointer,
+                    path: friendlyPath(pointer, json),
+                    message: `${friendlyPath(pointer, json)} — USB2Serial ports don't support response filters. Zoom rejects the profile at load.`,
+                });
+            });
+        });
+    }
+
+    // Inspect every defined filter for trigger_event problems and regex
+    // syntax. The schema enforces presence; this layer covers the cross-ref
+    // and compile checks Zoom only does at receive time (which means a
+    // broken regex would otherwise sit silent until the device replies).
+    if (Array.isArray(json.response_filters)) {
+        const ruleKeys = new Set(
+            json.rules && typeof json.rules === 'object'
+                ? Object.keys(json.rules).filter((k) => k !== '$comment')
+                : []
+        );
+        json.response_filters.forEach((filter, fi) => {
+            if (!filter || typeof filter !== 'object') return;
+
+            // Regex syntax: Zoom defers compile to receive-time, so a bad
+            // pattern in filter_regex loads fine and only crashes when data
+            // arrives. Pre-compile here using JS's RegExp (same ECMAScript
+            // flavor as MSVC std::regex) so the user sees it now.
+            const pattern = filter.filter_regex;
+            if (typeof pattern === 'string' && pattern !== '') {
+                try {
+                    new RegExp(pattern);
+                } catch (e) {
+                    const pointer = `/response_filters/${fi}/filter_regex`;
                     errors.push({
-                        source: 'quirks',
+                        source: 'response-filter',
                         pointer,
                         path: friendlyPath(pointer, json),
-                        message:
-                            "Empty rules must be truly empty (nothing between the square brackets [])",
+                        message: `${friendlyPath(pointer, json)} — regex won't compile: ${e.message}. Zoom doesn't catch this at profile load; it would throw a regex_error the first time the device replied.`,
                     });
                 }
+
+                // High-bit byte detection: Zoom's receive pipeline runs the
+                // incoming bytes through what looks like a UTF-8 decoder
+                // before regex evaluation, so any byte > 0x7F either gets
+                // dropped (lone continuation byte → invalid UTF-8) or
+                // replaced with U+FFFD. Confirmed empirically: patterns
+                // like \xAA, \xFF, and [\s\S]*\xAA[\s\S]* never fire even
+                // when the device sends those exact bytes. Surface this as
+                // a warning so the user doesn't ship a profile that works
+                // in our simulator but is silently broken in production.
+                const highByteHits = new Set();
+                const hexRe = /\\x([0-9a-fA-F]{2})/g;
+                let hexMatch;
+                while ((hexMatch = hexRe.exec(pattern)) !== null) {
+                    const byte = parseInt(hexMatch[1], 16);
+                    if (byte > 0x7f) highByteHits.add(`\\x${hexMatch[1].toUpperCase()}`);
+                }
+                // Also catch any literal codepoint > 0x7F in the pattern —
+                // happens if the user pasted a binary byte into the field
+                // instead of typing the escape sequence.
+                for (const ch of pattern) {
+                    const code = ch.codePointAt(0);
+                    if (code > 0x7f) {
+                        const hex = code.toString(16).toUpperCase().padStart(2, '0');
+                        highByteHits.add(`literal byte 0x${hex}`);
+                    }
+                }
+                if (highByteHits.size > 0) {
+                    const list = Array.from(highByteHits).join(', ');
+                    const pointer = `/response_filters/${fi}/filter_regex`;
+                    errors.push({
+                        source: 'response-filter',
+                        pointer,
+                        path: friendlyPath(pointer, json),
+                        message: `${friendlyPath(pointer, json)} contains high-bit bytes (${list}) — Zoom's receive pipeline drops bytes > 0x7F before regex evaluation, so these will not match anything from a real device. Use ASCII-only patterns; match a printable status code if your device sends one.`,
+                    });
+                }
+            }
+
+            const trigger = filter.trigger_event;
+            if (typeof trigger !== 'string' || trigger === '') return; // covered elsewhere
+            const pointer = `/response_filters/${fi}/trigger_event`;
+            if (BUILTIN_EVENT_SET.has(trigger)) {
+                errors.push({
+                    source: 'response-filter',
+                    pointer,
+                    path: friendlyPath(pointer, json),
+                    message: `${friendlyPath(pointer, json)} = "${trigger}" — this name is a built-in Zoom Room event. Zoom rejects custom filters that shadow built-in rules; pick a unique name.`,
+                });
+                return;
+            }
+            if (!ruleKeys.has(trigger)) {
+                errors.push({
+                    source: 'response-filter',
+                    pointer,
+                    path: friendlyPath(pointer, json),
+                    message: `${friendlyPath(pointer, json)} = "${trigger}" — no rule with that name is defined. Add a rule with key "${trigger}" or change the trigger_event to match an existing rule.`,
+                });
             }
         });
     }
 
     return errors;
+}
+
+function runQuirkValidation(/* rawText, json */) {
+    // No quirks at this layer right now. The previous "empty rules must be
+    // literally [] with no whitespace" check turned out to be based on a
+    // misreading of Zoom's actual behavior — the binary's ParseRules emits
+    // `ruleMethods is empty, ruleName: <name>` for ANY empty rule.commands
+    // array, regardless of whitespace. The schema already enforces
+    // `minItems: 1` on both rule.commands and scene.commands, so AJV catches
+    // it cleanly. Keeping this hook (returning []) so the validateProfile
+    // cascade stays readable; new quirks can land here without restructuring.
+    return [];
 }
 
 // Backstop for serial port settings. AJV's nested if/then branches with $ref
@@ -733,6 +846,7 @@ export function validateProfile(rawText, json) {
         ...runDuplicateKeyValidation(rawText),
         ...runUniqueIdValidation(json),
         ...runSerialSettingsValidation(json),
+        ...runResponseFilterValidation(json),
     ];
 
     const schemaErrors = runSchemaValidation(json);

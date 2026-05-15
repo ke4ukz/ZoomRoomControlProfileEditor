@@ -22,8 +22,47 @@ A builder, validator, and preview tool for [Zoom Native Room Controls](https://s
 ## Coming soon
 - Icon pallet
 - Image export
-- Response filter injection test
 - Templates for common devices
+
+## Editing tips
+
+The same tips are available in-app via the **?** button at the top-right of the builder.
+
+### Backslashes and JSON
+
+In the actual JSON file, escaped hex bytes must have two backslashes (`\xFF`). This gets messy, especially with filter regexes. This editor handles the double-escaping for you, so in every `command`, `value`, and `filter_regex` field you can just use a single backslash as normal.
+
+### Command strings (port → device)
+
+A method's `command` is the raw bytes sent on the wire. Use `\r`, `\n`, `\t` for control characters and `\xNN` for any arbitrary byte (`\xFF`, `\x02`, etc.). Zoom decodes these at send time; the byte that hits the device is the single character each escape represents.
+
+For methods with `type: "actions"`, `%` in the command string is replaced with the matched param's `value` at send time. Add a `params` array and use `%` as the placeholder. If it's `type: "action"` (singulgar), the `%` is just sent as a literal percent character.
+
+### Regex flavor for response filters
+
+Zoom uses MSVC `std::regex` with the ECMAScript flavor — equivalent to JavaScript's `RegExp`. To test patterns externally, use [regex101.com](https://regex101.com) with **"JavaScript" flavor selected**. Don't tick the `s` (dotAll) flag — it postdates Zoom's regex engine. Use `[\s\S]` when you would need `.` to also match newlines.
+
+Captured groups don't pass through to rule handlers — filters fire by name only. Use the response-injection panel (in the activity log drawer) to test patterns against simulated device replies.
+
+### Comments
+
+The `$comment` field on any block (info, adapter, port, method, param, scene, rule, filter) is ignored by Zoom and by schema validation. Free-form notes for whoever opens the profile next. Add one with the **+ Comment** button on any item.
+
+## Undocumented but Confirmed Behavior
+
+These are behaviors that the Zoom documentation does not indicate but have been confirmed through various methods. The validator catches violations so you don't find out in a customer's room with them standing there.
+
+- **Response filters don't work on USB2Serial adapters.** Zoom rejects profiles where a `port.response_filter` is set on a USB2Serial port. 
+- **`response_filter.trigger_event` cannot shadow a built-in `zr_*` event.** Zoom rejects profiles where a custom filter trigger collides with one of the built-in event names listed in the [Room Controls for Zoom Rooms](https://support.zoom.com/hc/en/article?id=zm_kb&sysparm_article=KB0064072) documentation (list copied in `/doc/zoom_events.csv). 
+- **`response_filter.trigger_event` must reference a rule that exists.** A filter pointing at an undefined rule key is rejected.
+- **Rule and scene command arrays must not be empty.** If a rule's commands or a scene's commands list is `[]`, Zoom rejects the profile at parse time. The schema enforces this via `minItems: 1` on both, so the builder catches it before the JSON ever reaches Zoom. 
+- **Port IDs should be unique across adapters.** Command references (`port.method[.param]`) have no adapter qualifier, so two adapters with the same port id leave the second port unreachable via refs (Zoom uses the first matching ID).
+- **Rule keys are case-sensitive.** `meeting_started` and `Meeting_started` are different rules. The schema's pattern check enforces this in both directions, but it's worth knowing.
+- **Response filters dispatch all-match, not first-match.** When data arrives on a port, Zoom evaluates *every* filter assigned to that port and fires the `trigger_event` of every one whose regex matches.
+- **Response filters use `regex_match`, not `regex_search`.** The pattern must match the *entire* received buffer, not just a substring of it. Verified empirically — `a[\s\S]*b` doesn't fire on input `12ab` even though a search-based engine would find the match at offset 2. Wrap patterns with `[\s\S]*` on both sides to absorb surrounding content (e.g. `[\s\S]*Login:[\s\S]*`).
+- **Response filter matching is per-chunk, not per-line.** Neither the per-protocol receive hook nor the dispatch loop accumulates bytes between calls. Each receive callback regexes whatever was delivered. If a device fragments its reply across TCP packets, each fragment is matched independently — a regex that needs to see the full reply will be unreliable on slow / chatty connections.
+- **Response filter regex flavor is MSVC `std::regex` ECMAScript** JavaScript's `RegExp` implements the same dialect, so the simulator and Zoom match identically for practical ASCII patterns.
+- **Response filter matching is ASCII-only in practice** Zoom's receive pipeline decodes incoming bytes as UTF-8 before the regex sees them. Bytes `0x80`–`0xFF` are invalid as lone UTF-8 bytes, so the decoder drops or replaces them and the regex never sees them. Verified empirically — patterns like `\xAA` and `[\s\S]*\xFF[\s\S]*` don't fire even when the device sends those exact bytes. Match on printable status codes instead; for purely binary protocols, response filters are not the right tool. The validator surfaces a warning if any `filter_regex` contains a `\xNN` escape with `NN > 0x7F`.
 
 ## Attribution
 

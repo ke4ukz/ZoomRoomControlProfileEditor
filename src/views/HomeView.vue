@@ -345,11 +345,45 @@
                             <div class="log-drawer-header">
                                 <span class="log-title">Activity Log</span>
                                 <button
+                                    class="log-inject-toggle"
+                                    :class="{ active: injectionExpanded }"
+                                    :title="injectionExpanded ? 'Hide response injection' : 'Show response injection — simulate data arriving on a port'"
+                                    @click="injectionExpanded = !injectionExpanded">
+                                    <span class="material-icons">input</span>
+                                </button>
+                                <button
                                     class="log-close"
                                     title="Hide log"
                                     @click="logVisible = false">
                                     <span class="material-icons">close</span>
                                 </button>
+                            </div>
+                            <div
+                                v-if="injectionExpanded"
+                                class="log-inject-panel">
+                                <p class="log-inject-hint">
+                                    Run a simulated device reply through every defined
+                                    response filter. Backslash escapes
+                                    (<code>\r</code>, <code>\n</code>, <code>\t</code>,
+                                    <code>\xAA</code>) in the input are decoded to actual
+                                    bytes before the regex runs.
+                                </p>
+                                <label class="log-inject-row">
+                                    <span class="log-inject-label">Bytes</span>
+                                    <input
+                                        type="text"
+                                        v-model="injectionBytes"
+                                        placeholder="e.g. Login:\r\n"
+                                        @keydown.enter.prevent="runInjection" />
+                                </label>
+                                <div class="log-inject-actions">
+                                    <button
+                                        class="log-inject-fire"
+                                        :disabled="!injectionBytes"
+                                        @click="runInjection">
+                                        Inject
+                                    </button>
+                                </div>
                             </div>
                             <div class="log-scroll">
                                 <p
@@ -381,10 +415,10 @@
                                 v-if="logEntries.length > 0"
                                 class="log-drawer-footer">
                                 <button
-                                    class="log-clear"
+                                    class="btn-trash"
                                     title="Clear log"
                                     @click="clearLog">
-                                    Clear
+                                    <span class="material-icons">delete_outline</span>
                                 </button>
                             </div>
                         </aside>
@@ -430,7 +464,16 @@
                                     </div>
                                 </section>
                                 <section class="output-card">
-                                    <p class="section-label">Output</p>
+                                    <div class="output-card-header">
+                                        <p class="section-label">Output</p>
+                                        <button
+                                            v-if="target || commands.length > 0"
+                                            class="btn-trash"
+                                            title="Clear output"
+                                            @click="clearOutput">
+                                            <span class="material-icons">delete_outline</span>
+                                        </button>
+                                    </div>
                                     <div
                                         id="zoom-output"
                                         v-if="target">
@@ -487,6 +530,7 @@
 import exampleJson from '@/assets/example.json';
 import { validateProfile } from '@/validation/validateProfile';
 import { transformProfile, formatCommand } from '@/validation/transformProfile';
+import { dispatchResponse, escapeWireBytes } from '@/validation/responseInjection';
 import { schemaState, loadRemoteSchema } from '@/validation/schemaLoader';
 import BuilderPanel from '@/components/BuilderPanel.vue';
 import { EDITOR_URL, todayIso, orderProfileKeys } from '@/config';
@@ -627,6 +671,11 @@ export default {
         logEntries: [],
         logVisible: false,
         logUnreadCount: 0,
+        // Response-injection UI state: expanded panel above the log scroll
+        // and the bytes the user wants to fake. Kept in HomeView so the
+        // input survives opening / closing the drawer.
+        injectionExpanded: false,
+        injectionBytes: '',
         // Non-reactive container for CodeMirror's EditorView. Vue 3 reserves
         // `_`/`$` -prefixed property names, so we hang the view off a regular
         // wrapper object instead of a bare `this._cmView = ...` assignment.
@@ -766,6 +815,10 @@ export default {
             this.logEntries = [];
             this.logUnreadCount = 0;
         },
+        clearOutput() {
+            this.target = '';
+            this.commands = [];
+        },
         logTrigger(kind, label, commands) {
             // Build one log entry for a user-initiated trigger (scene button,
             // event button, or direct control press). Each resolved command is
@@ -790,6 +843,63 @@ export default {
                 message: summary,
                 details,
             });
+        },
+        runInjection() {
+            const json = this.rawProfile;
+            if (!json) {
+                this.pushLog({ level: 'error', message: 'Injection: profile JSON does not parse.' });
+                return;
+            }
+            const result = dispatchResponse(json, this.injectionBytes);
+            const rendered = escapeWireBytes(result.bytes);
+            // Summary log: every defined filter's outcome, plus the list of
+            // events that fired. Note: the simulator runs against every
+            // filter in `response_filters`, ignoring per-port wiring. Zoom
+            // at runtime only evaluates filters that the receiving port
+            // opts into — flagged in the help popup so the user knows.
+            const details = [];
+            if (result.results.length === 0) {
+                details.push('(no response filters defined in this profile)');
+            } else {
+                for (const r of result.results) {
+                    if (r.error) {
+                        details.push(`${r.name}: ${r.error}`);
+                    } else if (r.matched) {
+                        details.push(`${r.name}: matched`);
+                    } else {
+                        details.push(`${r.name}: no match`);
+                    }
+                }
+            }
+            const summary = result.firedEvents.length > 0
+                ? `Inject (${result.bytes.length} bytes) → ${result.firedEvents.length} event${result.firedEvents.length === 1 ? '' : 's'} fired (${result.firedEvents.join(', ')})`
+                : `Inject (${result.bytes.length} bytes) → no filter matched`;
+            this.pushLog({
+                level: result.firedEvents.length > 0 ? 'info' : 'warn',
+                message: summary,
+                details: [`input: ${rendered}`, ...details],
+            });
+            // Run each fired event through the same dispatch path as a
+            // button click so the resolved commands surface in the Output
+            // pane and the activity log. Each event also gets its own log
+            // line for the resolved commands, mirroring Zoom's runtime
+            // behavior of "matched filter → execute the rule it points at."
+            if (result.firedEvents.length > 0 && this.calculatedControls) {
+                const ruleByEvent = new Map(
+                    (this.calculatedControls.resolvedRules || []).map((r) => [r.event, r])
+                );
+                for (const event of result.firedEvents) {
+                    const rule = ruleByEvent.get(event);
+                    if (rule) {
+                        this.eventClick(rule);
+                    } else {
+                        this.pushLog({
+                            level: 'warn',
+                            message: `Triggered event "${event}" is not a defined rule — Zoom would log "triggered event is not found".`,
+                        });
+                    }
+                }
+            }
         },
         zoomClick(adapter, port, method, param) {
             // Substitute empty id segments with an obvious placeholder so a
@@ -2005,6 +2115,17 @@ $zoom-button-height: 58px;
             letter-spacing: 0.04em;
             margin: 0;
         }
+
+        // Row that holds the section label on the left and a trash-can
+        // clear button on the right. Only used by the Output card right
+        // now — the section-label by itself still works for the Events
+        // card, where there's nothing to clear.
+        .output-card-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.5rem;
+        }
     }
 
     #output-empty {
@@ -2164,6 +2285,27 @@ $zoom-button-height: 58px;
         margin-right: auto;
     }
 
+    .log-inject-toggle {
+        @include b.btn-shared;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 3px;
+        padding: 2px;
+        color: c.$text-dark;
+        opacity: 0.6;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+
+        .material-icons { font-size: 18px; }
+        &:hover { opacity: 1; }
+        &.active {
+            opacity: 1;
+            background: rgba(0, 0, 0, 0.08);
+            border-color: c.$border;
+        }
+    }
+
     .log-close {
         @include b.btn-shared;
         background: transparent;
@@ -2180,6 +2322,86 @@ $zoom-button-height: 58px;
     }
 }
 
+// Response-injection panel sits above the log scroll when expanded. Lets
+// the user simulate a device-reply payload arriving on a chosen port and
+// see which filter (if any) Zoom would route the data through.
+.log-inject-panel {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid c.$border;
+    background: rgba(0, 0, 0, 0.02);
+    font-size: 0.78rem;
+}
+
+.log-inject-hint {
+    margin: 0;
+    color: c.$text-dark;
+    opacity: 0.75;
+    line-height: 1.4;
+
+    code {
+        background: #e8e8ec;
+        border-radius: 2px;
+        padding: 0 3px;
+        font-size: 0.85em;
+    }
+}
+
+.log-inject-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+
+    .log-inject-label {
+        flex: 0 0 38px;
+        text-transform: uppercase;
+        font-size: 0.68rem;
+        font-weight: 600;
+        opacity: 0.6;
+        letter-spacing: 0.04em;
+    }
+
+    select, input {
+        flex: 1 1 auto;
+        min-width: 0;
+        font-size: 0.82rem;
+        padding: 3px 6px;
+        border: 1px solid c.$border;
+        border-radius: 3px;
+        font-family: inherit;
+    }
+
+    input {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+    }
+}
+
+.log-inject-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.log-inject-fire {
+    @include b.btn-shared;
+    background: c.$accent;
+    color: #fff;
+    border: none;
+    border-radius: 3px;
+    padding: 0.25rem 0.75rem;
+    font-size: 0.78rem;
+
+    &:disabled {
+        opacity: 0.4;
+        cursor: not-allowed;
+    }
+    &:hover:not(:disabled) {
+        opacity: 0.9;
+    }
+}
+
 // Footer sits below the scroller, holding the Clear button out of the way
 // of the close button at the top so it's harder to mis-click when reaching
 // for "hide log."
@@ -2189,19 +2411,25 @@ $zoom-button-height: 58px;
     justify-content: flex-end;
     padding: 0.35rem 0.5rem;
     border-top: 1px solid c.$border;
+}
 
-    .log-clear {
-        @include b.btn-shared;
-        background: transparent;
-        border: 1px solid c.$border;
-        border-radius: 3px;
-        padding: 0.15rem 0.6rem;
-        font-size: 0.72rem;
-        color: c.$text-dark;
-        opacity: 0.75;
+// Shared trash-can icon button used by both the Output card and the Activity
+// Log drawer for their respective Clear actions. Subtle by default — only
+// the icon at low opacity — to keep it from drawing the eye away from the
+// content it's attached to; brightens on hover.
+.btn-trash {
+    @include b.btn-shared;
+    background: transparent;
+    border: none;
+    padding: 2px;
+    color: c.$text-dark;
+    opacity: 0.55;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 
-        &:hover { opacity: 1; background: #f4f4f5; }
-    }
+    .material-icons { font-size: 18px; }
+    &:hover { opacity: 0.95; color: firebrick; }
 }
 
 .log-drawer > .log-scroll {
