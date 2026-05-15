@@ -1948,8 +1948,71 @@ export default {
         },
         onAdapterModelChange(ai) {
             const adapter = this.localProfile.adapters[ai];
+            // Drop fields that don't belong on the new model. Without this,
+            // switching (say) GenericNetworkAdapter → USB2Serial leaves the
+            // old `ip: ""` in place, and Zoom's schema rejects the profile
+            // because USB2Serial adapters aren't allowed to carry an `ip`.
+            // Mirrors the model-conditional `not` clauses in the schema.
+            //
+            // The cleanup is intentionally aggressive — we'd rather make
+            // users re-enter port settings when switching back to a model
+            // than leave stale config muddying the file (especially for
+            // people who only ever look at the builder + preview and never
+            // see the JSON).
+            const FORBIDDEN_BY_MODEL = {
+                iTachIP2SL: ['com'],
+                iTachIP2CC: ['com'],
+                GenericNetworkAdapter: ['uuid', 'com'],
+                USB2Serial: ['uuid', 'ip'],
+            };
+            const forbidden = FORBIDDEN_BY_MODEL[adapter.model] || [];
+            for (const field of forbidden) {
+                if (field in adapter) delete adapter[field];
+            }
+            // Seed the address field the new model actually uses so the
+            // input renders empty rather than `undefined`-bound, which would
+            // need an extra keystroke to wake up two-way binding.
             if (adapter.model === 'USB2Serial') {
                 if (adapter.com == null) adapter.com = '';
+            } else {
+                if (adapter.ip == null) adapter.ip = '';
+            }
+
+            // Port-level cleanup. Things that vary by model:
+            //   - `settings`: required by iTachIP2SL (string-coded values)
+            //     and USB2Serial (integer-coded values), absent on the
+            //     other two. The shape is incompatible across the two
+            //     serial models, so we always wipe and re-seed rather than
+            //     trying to coerce (`"9600"` ↔ `9600`).
+            //   - `position`: only valid on iTachIP2CC (relay number).
+            //   - `methods`: iTachIP2CC auto-generates power.on/power.off
+            //     in the transform pass, so any user-defined methods on an
+            //     IP2CC port are silently overwritten at preview time.
+            //     Wipe them on the way in so what the user sees in the
+            //     builder matches what Zoom will see.
+            //   - `response_filter`: USB2Serial ports don't support them
+            //     (Zoom rejects the profile at load). Strip on the way in.
+            if (Array.isArray(adapter.ports)) {
+                for (const port of adapter.ports) {
+                    if (!port || typeof port !== 'object') continue;
+                    delete port.settings;
+                    if (adapter.model !== 'iTachIP2CC') {
+                        delete port.position;
+                    }
+                    if (adapter.model === 'iTachIP2CC') {
+                        delete port.methods;
+                        if (port.position == null) port.position = 1;
+                    }
+                    if (adapter.model === 'USB2Serial') {
+                        delete port.response_filter;
+                    }
+                    if (
+                        adapter.model === 'iTachIP2SL' ||
+                        adapter.model === 'USB2Serial'
+                    ) {
+                        this.ensurePortSettings(port, adapter.model);
+                    }
+                }
             }
         },
         toggleModelDropdown(ai) {

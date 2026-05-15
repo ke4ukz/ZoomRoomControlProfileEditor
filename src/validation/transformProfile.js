@@ -157,7 +157,7 @@ function applyVisibility(json) {
     });
 }
 
-function resolveCommandRefs(json, commandRefs) {
+export function resolveCommandRefs(json, commandRefs) {
     // Returns one entry per ref so the Output pane / Log can show the
     // mapping from `port.method[.param]` → `address: command-bytes`. Refs we
     // can't resolve are kept as `{ ref, error }` so the user can see what

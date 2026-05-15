@@ -670,7 +670,7 @@
 <script>
 import exampleJson from '@/assets/example.json';
 import { validateProfile } from '@/validation/validateProfile';
-import { transformProfile, formatCommand } from '@/validation/transformProfile';
+import { transformProfile, formatCommand, resolveCommandRefs } from '@/validation/transformProfile';
 import { dispatchResponse, escapeWireBytes } from '@/validation/responseInjection';
 import {
     ZOOM_BUILTIN_ICONS,
@@ -1300,12 +1300,30 @@ export default {
                     const rule = ruleByEvent.get(event);
                     if (rule) {
                         this.eventClick(rule);
-                    } else {
-                        this.pushLog({
-                            level: 'warn',
-                            message: `Triggered event "${event}" is not a defined rule — Zoom would log "triggered event is not found".`,
-                        });
+                        continue;
                     }
+                    // No literal rule entry. Zoom falls back to executing the
+                    // event name as a port command-ref, which covers the
+                    // iTachIP2CC case where `<port>.power.on` is auto-generated
+                    // by the transform pass and never appears in `json.rules`.
+                    // Mirror that here by resolving the event through the
+                    // same path as scene/rule commands and synthesizing a
+                    // one-command rule for the dispatch log.
+                    if (event.includes('.') && this.calculatedControls) {
+                        const resolved = resolveCommandRefs(this.calculatedControls, [event]);
+                        if (
+                            resolved.length === 1 &&
+                            !resolved[0].error &&
+                            resolved[0].address !== undefined
+                        ) {
+                            this.eventClick({ event, commands: resolved });
+                            continue;
+                        }
+                    }
+                    this.pushLog({
+                        level: 'warn',
+                        message: `Triggered event "${event}" is not a defined rule — Zoom would log "triggered event is not found".`,
+                    });
                 }
             }
         },
