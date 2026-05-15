@@ -603,13 +603,47 @@
                 class="rule-card">
                 <div class="rule-header">
                     <span class="row-label">Event</span>
-                    <input
-                        type="text"
-                        class="rule-event"
-                        :value="event"
-                        placeholder="event_name (e.g. zr_meeting_started)"
-                        required
-                        @change="renameRule(event, $event.target.value)" />
+                    <div class="rule-event-combo">
+                        <input
+                            type="text"
+                            class="rule-event"
+                            :class="{ 'has-validation-error': hasRuleEventConflict(event) }"
+                            :value="ruleEventDisplay(event)"
+                            placeholder="event_name (e.g. zr_meeting_started)"
+                            required
+                            :title="hasRuleEventConflict(event)
+                                ? `Another rule already has the key '${ruleEventDisplay(event)}'. Remove that rule (or change this one) to commit the rename.`
+                                : ruleEventTooltip(ruleEventDisplay(event))"
+                            @input="setRuleEventDraft(event, $event.target.value)"
+                            @change="commitRuleEvent(event)" />
+                        <button
+                            type="button"
+                            class="model-chevron"
+                            :aria-expanded="openRuleEventDropdownIndex === ri"
+                            title="Pick from known Zoom Room events"
+                            @click.stop="toggleRuleEventDropdown(ri)">
+                            ▾
+                        </button>
+                        <ul
+                            v-if="openRuleEventDropdownIndex === ri"
+                            class="rule-event-dropdown"
+                            @click.stop>
+                            <template
+                                v-for="bucket in BUILTIN_EVENTS_BY_CATEGORY"
+                                :key="bucket.category">
+                                <li class="dropdown-category">{{ bucket.category }}</li>
+                                <li
+                                    v-for="ev in bucket.events"
+                                    :key="ev.id"
+                                    :class="{ selected: ruleEventDisplay(event) === ev.id }"
+                                    :title="ev.note || ''"
+                                    @click="selectRuleEvent(event, ev.id)">
+                                    <span class="event-label">{{ ev.label }}</span>
+                                    <span class="event-id">{{ ev.id }}</span>
+                                </li>
+                            </template>
+                        </ul>
+                    </div>
                     <button
                         class="btn-delete"
                         title="Remove rule"
@@ -951,6 +985,7 @@
 
 <script>
 import { SCHEMA_URL, EDITOR_URL, todayIso, orderProfileKeys } from '@/config';
+import { BUILTIN_EVENTS_BY_CATEGORY, BUILTIN_EVENT_BY_ID } from '@/data/builtinEvents';
 
 // Small inline component for the "+ Comment / $comment" row. Owns no state of
 // its own — emits to the parent which mutates the owner directly.
@@ -1297,6 +1332,19 @@ export default {
             // whose dropdown is currently expanded. Tracked at the component
             // level rather than per-adapter so opening one closes the others.
             openModelDropdownIndex: -1,
+            // Same idea for the rule-event combo: which rule-card's event
+            // dropdown is open.
+            openRuleEventDropdownIndex: -1,
+            // In-progress rule-event renames keyed by the rule's CURRENT
+            // key. When the user types or picks something that would
+            // conflict with another existing rule key, the rename can't
+            // commit (Object can't hold duplicates), but we keep their
+            // typed value here so the input still shows it and the
+            // hasRuleEventConflict computed flags it red. Cleared (well,
+            // orphaned and ignored) once the rename successfully commits.
+            ruleEventDrafts: {},
+            // Make the imported events visible to the template.
+            BUILTIN_EVENTS_BY_CATEGORY,
             // Editing-tips modal visibility. Help button in the builder
             // header toggles it; Escape and backdrop click close it.
             helpVisible: false,
@@ -1372,13 +1420,15 @@ export default {
         },
     },
     mounted() {
-        // Close the model dropdown when clicking outside it. The chevron
-        // button and the dropdown <ul> use @click.stop to prevent their own
-        // clicks from bubbling up and closing themselves.
+        // Close the model / rule-event dropdowns when clicking outside them.
+        // The chevron buttons and the dropdown <ul>s use @click.stop to
+        // prevent their own clicks from bubbling up and closing themselves.
         document.addEventListener('click', this.closeModelDropdown);
+        document.addEventListener('click', this.closeRuleEventDropdown);
     },
     beforeUnmount() {
         document.removeEventListener('click', this.closeModelDropdown);
+        document.removeEventListener('click', this.closeRuleEventDropdown);
     },
     watch: {
         // Focus the help modal's backdrop when it opens so the Escape key
@@ -1712,6 +1762,9 @@ export default {
             this.openModelDropdownIndex = -1;
             this.onAdapterModelChange(ai);
         },
+        closeRuleEventDropdown() {
+            this.openRuleEventDropdownIndex = -1;
+        },
         closeModelDropdown() {
             this.openModelDropdownIndex = -1;
         },
@@ -2021,6 +2074,64 @@ export default {
                 next[k === oldKey ? newKey : k] = this.localProfile.rules[k];
             }
             this.localProfile.rules = next;
+        },
+        // ----- Rule-event dropdown -----
+        toggleRuleEventDropdown(ri) {
+            this.openRuleEventDropdownIndex =
+                this.openRuleEventDropdownIndex === ri ? -1 : ri;
+        },
+        // The value the input field should currently show. If there's an
+        // in-progress draft for this rule, show that; otherwise show the
+        // committed key. Drafts diverge from the committed key only when
+        // the user typed/picked something that would collide with another
+        // rule's key (Object can't hold duplicates, so we can't commit it
+        // but we still want the UI to reflect the user's intent).
+        ruleEventDisplay(event) {
+            return event in this.ruleEventDrafts ? this.ruleEventDrafts[event] : event;
+        },
+        setRuleEventDraft(event, val) {
+            this.ruleEventDrafts[event] = val;
+        },
+        hasRuleEventConflict(event) {
+            const draft = this.ruleEventDrafts[event];
+            if (draft === undefined) return false;
+            const trimmed = (draft || '').trim();
+            if (!trimmed || trimmed === event) return false;
+            // Conflict iff another rule already has this key.
+            return Object.prototype.hasOwnProperty.call(this.localProfile.rules || {}, trimmed);
+        },
+        commitRuleEvent(event) {
+            const draft = this.ruleEventDrafts[event];
+            if (draft === undefined) return;
+            const trimmed = (draft || '').trim();
+            if (!trimmed || trimmed === event) {
+                // Empty / unchanged — drop the draft and re-render to the
+                // committed key.
+                delete this.ruleEventDrafts[event];
+                return;
+            }
+            if (this.hasRuleEventConflict(event)) return; // leave draft visible
+            // Safe to commit: rename, then clear the (now-orphaned) draft.
+            this.renameRule(event, trimmed);
+            delete this.ruleEventDrafts[event];
+        },
+        selectRuleEvent(currentEvent, newEventId) {
+            this.openRuleEventDropdownIndex = -1;
+            this.setRuleEventDraft(currentEvent, newEventId);
+            // Try to commit immediately; if it conflicts, the draft stays
+            // visible with the conflict styling and the user can either
+                // delete the other rule or pick something else.
+            this.commitRuleEvent(currentEvent);
+        },
+        ruleEventTooltip(eventId) {
+            // Show the friendly label + note in the input's title attribute
+            // when the current value matches a known built-in event. Custom
+            // events get a generic placeholder.
+            const entry = BUILTIN_EVENT_BY_ID.get(eventId);
+            if (!entry) return 'Custom event name';
+            const parts = [`${entry.label} (${entry.category})`];
+            if (entry.note) parts.push(entry.note);
+            return parts.join(' — ');
         },
         addRuleCommand(event) {
             this.localProfile.rules[event].push('');
@@ -2579,6 +2690,89 @@ export default {
             background: c.$zoom-button;
             font-weight: 600;
         }
+    }
+}
+
+// ---- Rule event combo ----
+// Same chevron pattern as adapter-model, but the dropdown is wider and has
+// a two-line layout per entry (friendly label on top, `zr_*` id below).
+// Categories are surfaced as inline section headers within the list.
+.rule-event-combo {
+    position: relative;
+    display: flex;
+    flex: 1 1 auto;
+    min-width: 0;
+    align-items: stretch;
+
+    .rule-event {
+        flex: 1 1 auto;
+        min-width: 0;
+        border-radius: 3px 0 0 3px;
+        border-right: none;
+    }
+}
+
+.rule-event-dropdown {
+    position: absolute;
+    top: calc(100% + 2px);
+    left: 0;
+    right: 0;
+    z-index: 10;
+    background: #fff;
+    border: 1px solid c.$border;
+    border-radius: 3px;
+    list-style: none;
+    margin: 0;
+    padding: 2px 0;
+    max-height: 320px;
+    overflow-y: auto;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.08);
+    font-size: 0.82rem;
+
+    li {
+        padding: 0.3rem 0.6rem;
+        cursor: pointer;
+        color: c.$text-dark;
+        display: flex;
+        flex-direction: column;
+        gap: 0.05rem;
+
+        &:hover {
+            background: c.$zoom-button;
+        }
+
+        &.selected {
+            background: c.$zoom-button;
+
+            .event-label { font-weight: 600; }
+        }
+    }
+
+    .dropdown-category {
+        background: #f4f4f8;
+        padding: 0.25rem 0.6rem;
+        text-transform: uppercase;
+        font-size: 0.66rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        color: c.$text-dark;
+        opacity: 0.6;
+        cursor: default;
+        border-top: 1px solid c.$border;
+
+        &:first-child { border-top: none; }
+        &:hover { background: #f4f4f8; }
+    }
+
+    .event-label {
+        font-size: 0.82rem;
+    }
+
+    .event-id {
+        font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Courier New', monospace;
+        font-size: 0.72rem;
+        color: c.$text-dark;
+        opacity: 0.7;
     }
 }
 

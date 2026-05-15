@@ -1,6 +1,6 @@
 import Ajv from 'ajv';
 import { schemaState } from './schemaLoader';
-import { BUILTIN_EVENT_SET } from '@/data/builtinEvents';
+import { BUILTIN_EVENT_SET, BUILTIN_EVENT_BY_ID } from '@/data/builtinEvents';
 
 let cachedSchema = null;
 let cachedValidator = null;
@@ -751,6 +751,44 @@ function runResponseFilterValidation(json) {
     return errors;
 }
 
+// Some built-in events are semantic aliases of each other — e.g.
+// `zr_meeting_started`, `zr_zoom_meeting_started`, and
+// `zr_interop_meeting_started` all carry the "Meeting Started" label in
+// `doc/zoom_events.csv`. Zoom fires every matching rule, so defining
+// handlers for two aliases means the commands run twice on one logical
+// event. The user almost never wants that — surface it as a warning.
+function runOverlappingRulesValidation(json) {
+    const errors = [];
+    if (!json || typeof json.rules !== 'object' || json.rules === null) return errors;
+    // Group rule keys by their CSV label.
+    const byLabel = new Map();
+    for (const key of Object.keys(json.rules)) {
+        if (key === '$comment') continue;
+        const entry = BUILTIN_EVENT_BY_ID.get(key);
+        if (!entry) continue; // Custom event names have no semantic peer.
+        if (!byLabel.has(entry.label)) byLabel.set(entry.label, []);
+        byLabel.get(entry.label).push(key);
+    }
+    for (const [label, keys] of byLabel) {
+        if (keys.length < 2) continue;
+        // Emit one warning per participating rule key so each rule in the
+        // builder picks up the dashed-red indicator via the existing
+        // errorTargets mapping. The message names all the overlapping keys
+        // so the user can see who their cohort is.
+        const cohort = keys.map((k) => `"${k}"`).join(', ');
+        for (const key of keys) {
+            const pointer = `/rules/${key}`;
+            errors.push({
+                source: 'overlapping-rules',
+                pointer,
+                path: friendlyPath(pointer, json),
+                message: `${friendlyPath(pointer, json)} — multiple rules fire on the "${label}" event (${cohort}). Zoom triggers every matching rule, so commands defined here will run alongside those in the others on the same underlying event. Pick one and remove the others, or accept the duplicate execution intentionally.`,
+            });
+        }
+    }
+    return errors;
+}
+
 function runQuirkValidation(/* rawText, json */) {
     // No quirks at this layer right now. The previous "empty rules must be
     // literally [] with no whitespace" check turned out to be based on a
@@ -847,6 +885,7 @@ export function validateProfile(rawText, json) {
         ...runUniqueIdValidation(json),
         ...runSerialSettingsValidation(json),
         ...runResponseFilterValidation(json),
+        ...runOverlappingRulesValidation(json),
     ];
 
     const schemaErrors = runSchemaValidation(json);
