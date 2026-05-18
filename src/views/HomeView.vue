@@ -229,6 +229,8 @@
                                                                     errorTargets.params.has(
                                                                         ai + ':' + (port.id || ('#' + pi)) + '#' + port.methods.indexOf(port.main_method) + '#' + mi
                                                                     ),
+                                                                shine: isShining('control', controlRef(port, port.main_method, param)),
+                                                                'shine-pulse': isPulsing('control', controlRef(port, port.main_method, param)),
                                                             }"
                                                             @click="zoomClick(adapter, port, port.main_method, param)">
                                                             <p v-if="!param.icon">
@@ -256,6 +258,8 @@
                                                             errorTargets.methods.has(
                                                                 ai + ':' + (port.id || ('#' + pi)) + '#' + port.methods.indexOf(port.main_method)
                                                             ),
+                                                        shine: isShining('control', controlRef(port, port.main_method)),
+                                                        'shine-pulse': isPulsing('control', controlRef(port, port.main_method)),
                                                     }"
                                                     @click="zoomClick(adapter, port, port.main_method)">
                                                     <p v-if="!port.main_method.icon">
@@ -312,6 +316,8 @@
                                                                 'btn-circle': param.icon != null,
                                                                 'preview-error':
                                                                     errorTargets.params.has(ai + ':' + (port.id || ('#' + pi)) + '#' + mi + '#' + ppi),
+                                                                shine: isShining('control', controlRef(port, method, param)),
+                                                                'shine-pulse': isPulsing('control', controlRef(port, method, param)),
                                                             }"
                                                             @click="zoomClick(adapter, port, method, param)">
                                                             <p v-if="!param.icon">
@@ -334,6 +340,8 @@
                                                         :class="{
                                                             'btn-rectangle': method.icon == null,
                                                             'btn-circle': method.icon != null,
+                                                            shine: isShining('control', controlRef(port, method)),
+                                                            'shine-pulse': isPulsing('control', controlRef(port, method)),
                                                         }"
                                                         @click="zoomClick(adapter, port, method)">
                                                         <p v-if="!method.icon">
@@ -810,6 +818,13 @@ export default {
         json: (getTemplateByFile(DEMO_TEMPLATE_FILE) || { text: '{}' }).text,
         target: '',
         commands: [],
+        // Composite keys ("control:<ref>") for the persistent glow that
+        // marks the most-recently-fired control button(s). Replaced wholesale
+        // on each new trigger so the glow always shows current activity.
+        firingTargets: new Set(),
+        // Same key shape, but for the transient one-shot border bolt. Entries
+        // self-clear after the 0.5s sweep so re-triggers can replay.
+        pulsingTargets: new Set(),
         scenesExpanded: false,
         showHidden: false,
         warningsExpanded: false,
@@ -893,6 +908,11 @@ export default {
             savePreviewVariant(newVal);
         },
         json() {
+            // Any edit invalidates the "last triggered" feedback: a button's
+            // identity is tied to its ref, but a deleted-and-recreated ref
+            // would silently inherit the previous button's glow. Clearing on
+            // every edit is the simplest rule that always matches user intent.
+            this.setShining([]);
             // Coalesce a burst of keystrokes into one log entry so the user can
             // scan the log without it being a wall of "JSON modified".
             if (this._jsonLogTimer) clearTimeout(this._jsonLogTimer);
@@ -1014,6 +1034,7 @@ export default {
         clearOutput() {
             this.target = '';
             this.commands = [];
+            this.setShining([]);
         },
         // The log / injection / palette drawers all share the right-edge
         // overlay slot in the preview pane. Opening any closes the others
@@ -1331,28 +1352,85 @@ export default {
                 }
             }
         },
-        zoomClick(adapter, port, method, param) {
+        controlRef(port, method, param) {
             // Substitute empty id segments with an obvious placeholder so a
             // missing-id error doesn't read as "port..param" (which is easy
             // to skim past as if it were just a leading-dot rendering glitch).
             const seg = (x) => (x ? x : '<MISSING_ID>');
-            const ref = param
+            return param
                 ? `${seg(port.id)}.${seg(method.id)}.${seg(param.id)}`
                 : `${seg(port.id)}.${seg(method.id)}`;
+        },
+        isShining(kind, id) {
+            return this.firingTargets.has(`${kind}:${id}`);
+        },
+        isPulsing(kind, id) {
+            return this.pulsingTargets.has(`${kind}:${id}`);
+        },
+        // Replace the currently-glowing set on the next microtask, batching
+        // all synchronous calls into one union. Under current Zoom behavior
+        // a filter response triggers exactly one event (the first matching
+        // filter wins), so `runInjection` only ever calls eventClick once
+        // per injection and the batching is effectively a no-op. It's kept
+        // as a forward guard: if Zoom ever allows a filter's `trigger` to be
+        // an array, this code already lights up every fired event's commands
+        // together instead of just the last one — no logic change needed.
+        setShining(keys) {
+            if (!this._shineBatch) {
+                this._shineBatch = new Set();
+                queueMicrotask(() => {
+                    this.firingTargets = this._shineBatch;
+                    this._shineBatch = null;
+                });
+            }
+            for (const k of keys) this._shineBatch.add(k);
+        },
+        // Fire the one-shot border bolt for a single key. Re-firing while the
+        // class is still applied requires removing it, waiting one tick for
+        // the DOM to drop the class, then re-adding — otherwise Vue sees no
+        // change and the CSS animation doesn't replay.
+        async pulseShine(kind, id) {
+            const key = `${kind}:${id}`;
+            if (this.pulsingTargets.has(key)) {
+                this.pulsingTargets.delete(key);
+                await this.$nextTick();
+            }
+            this.pulsingTargets.add(key);
+            setTimeout(() => this.pulsingTargets.delete(key), 500);
+        },
+        zoomClick(adapter, port, method, param) {
+            const ref = this.controlRef(port, method, param);
             this.target = ref;
             const fc = formatCommand(adapter, port, method, param);
             this.commands = [{ ref, address: fc.address, command: fc.command }];
             this.logTrigger('control', ref, this.commands);
+            this.setShining([`control:${ref}`]);
+            this.pulseShine('control', ref);
         },
         sceneClick(scene) {
             this.target = scene.id;
             this.commands = scene.resolvedCommands;
             this.logTrigger('scene', scene.name || scene.id, this.commands);
+            this.shineCommands(this.commands);
         },
         eventClick(rule) {
             this.target = rule.event;
             this.commands = rule.commands;
             this.logTrigger('event', this.eventLabel(rule.event), this.commands);
+            this.shineCommands(this.commands);
+        },
+        // Light up every control button whose ref appears in the given
+        // resolved-command list. Used by scene clicks, event clicks, and
+        // filter-response dispatches — the underlying zoom controls glow
+        // (persistent) and pulse (one-shot), not the trigger button itself.
+        shineCommands(commands) {
+            const items = Array.isArray(commands)
+                ? commands.filter((c) => c && c.ref && !c.error)
+                : [];
+            this.setShining(items.map((c) => `control:${c.ref}`));
+            for (const cmd of items) {
+                this.pulseShine('control', cmd.ref);
+            }
         },
         eventLabel,
         onResize(name, panes) {
@@ -1823,6 +1901,87 @@ export default {
 
 $zoom-panel-width: 666px;
 $zoom-button-height: 58px;
+
+// `--shine-color` is shared by both the transient border-bolt and the
+// persistent glow. Light preview uses the brand accent (visible against
+// white port cards); dark preview swaps to white so both effects read
+// against #1a1a1a.
+#preview {
+    --shine-color: #{c.$accent};
+
+    &.dark-preview {
+        --shine-color: #ffffff;
+    }
+}
+
+// Border-bolt machinery: `@property` registration is what lets the
+// conic-gradient angle and arc color interpolate inside @keyframes.
+@property --shine-angle {
+    syntax: '<angle>';
+    inherits: false;
+    initial-value: 0deg;
+}
+@property --shine-arc {
+    syntax: '<color>';
+    inherits: false;
+    initial-value: transparent;
+}
+@keyframes shine-sweep {
+    0%   { --shine-angle: 0deg;   --shine-arc: transparent; }
+    25%  { --shine-arc: var(--shine-color, #ffffff); }
+    75%  { --shine-arc: var(--shine-color, #ffffff); }
+    100% { --shine-angle: 360deg; --shine-arc: transparent; }
+}
+
+// Two stacked effects on .btn-zoom controls when their command fires:
+//   .shine-pulse  → one-shot border bolt sweeps once at trigger time
+//   .shine        → persistent glow that stays until the next activity
+// The pulse uses a pseudo-element ring (mask trick) so the host button's
+// own border/background stay untouched. The glow is a directionless
+// box-shadow on the button itself, transitioned for a smooth crossfade
+// when the active set changes.
+.btn-zoom {
+    position: relative;
+    transition: box-shadow 0.4s ease;
+
+    &.shine {
+        box-shadow: 0 0 10px 1px var(--shine-color);
+    }
+
+    &.shine-pulse::after {
+        content: '';
+        position: absolute;
+        inset: 0;
+        border: 2px solid transparent;
+        border-radius: inherit;
+        background:
+            conic-gradient(
+                from var(--shine-angle),
+                transparent 0%,
+                var(--shine-arc) 3%,
+                transparent 15%
+            ) border-box;
+        -webkit-mask:
+            linear-gradient(#fff 0 0) padding-box,
+            linear-gradient(#fff 0 0);
+        -webkit-mask-composite: xor;
+                mask-composite: exclude;
+        pointer-events: none;
+        animation: shine-sweep 0.5s ease-in 1;
+    }
+
+    // Honour the OS-level reduced-motion preference: drop the sweep entirely
+    // and snap the glow on/off instead of crossfading. The glow itself still
+    // shows, so the user keeps the "last triggered" feedback without the
+    // moving elements that reduced-motion is meant to suppress.
+    @media (prefers-reduced-motion: reduce) {
+        transition: none;
+
+        &.shine-pulse::after {
+            display: none;
+        }
+    }
+}
 
 // Wrapper around the outer Splitpanes. It exists purely so we have a stable
 // DOM element to hang the fullscreen-toggle class on — class fallthrough onto
